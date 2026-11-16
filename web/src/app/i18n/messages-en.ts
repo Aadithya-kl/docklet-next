@@ -1,3 +1,4 @@
+import { enProxyContract } from "@/data/messages/proxy-en";
 import { enRegistries } from "@/features/registries/messages/en";
 // American English interface texts define the catalogue shape for every locale.
 import { enActivity, enUserEvents } from "@/features/activity/messages/en";
@@ -12,6 +13,7 @@ import { enSettings } from "@/features/settings/messages/en";
 import { enSetup } from "@/features/setup/messages/en";
 import { enVolumes } from "@/features/volumes/messages/en";
 import { enLab } from "@/shared/preferences/messages/en";
+import { enProxy } from "@/shared/preferences/messages/proxy-lab-en";
 import { enVisual } from "@/shared/preferences/messages/visual-en";
 import { enNetworks } from "@/features/networks/messages/en";
 import { enPoolErrors } from "@/features/networks/messages/pool-en";
@@ -39,8 +41,10 @@ export const enMessages = {
   environment: enEnvironmentEvents,
   user: enUserEvents,
   lab: import.meta.env.DEV ? enLab : ({} as typeof enLab),
+  proxyLab: import.meta.env.DEV ? enProxy : ({} as typeof enProxy),
   visual: enVisual,
   dashboard: enDashboard,
+  proxyContract: enProxyContract,
   runMessages: enRunMessages,
   stacks: enStacks,
   editor: enEditor,

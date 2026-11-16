@@ -1,3 +1,4 @@
+import { deProxyContract } from "@/data/messages/proxy-de";
 import { deRegistries } from "@/features/registries/messages/de";
 // German interface texts follow the English base. Feature files own their texts.
 import { deActivity, deUserEvents } from "@/features/activity/messages/de";
@@ -12,6 +13,7 @@ import { deSettings } from "@/features/settings/messages/de";
 import { deSetup } from "@/features/setup/messages/de";
 import { deVolumes } from "@/features/volumes/messages/de";
 import { deLab } from "@/shared/preferences/messages/de";
+import { deProxy } from "@/shared/preferences/messages/proxy-lab-de";
 import { deVisual } from "@/shared/preferences/messages/visual-de";
 import { deNetworks } from "@/features/networks/messages/de";
 import { dePoolErrors } from "@/features/networks/messages/pool-de";
@@ -41,8 +43,10 @@ export const messages: typeof enMessages = {
   environment: deEnvironmentEvents,
   user: deUserEvents,
   lab: import.meta.env.DEV ? deLab : ({} as typeof deLab),
+  proxyLab: import.meta.env.DEV ? deProxy : ({} as typeof deProxy),
   visual: deVisual,
   dashboard: deDashboard,
+  proxyContract: deProxyContract,
   runMessages: deRunMessages,
   stacks: deStacks,
   editor: deEditor,

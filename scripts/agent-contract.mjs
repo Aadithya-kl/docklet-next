@@ -23,6 +23,40 @@ export function agentFixture(spec, fixture) {
   const recovery = schemas[summary.properties.recovery.$ref.split("/").at(-1)];
   const include = operation.parameters.find((parameter) => parameter.name === "includeSummary");
   if (!include || !summary || !recovery) throw new Error("missing activity discovery producer");
+  const moduleSource = readFileSync(new URL("../types/features/features.go", import.meta.url), "utf8");
+  const moduleConstant = (name) => moduleSource.match(new RegExp(`\\b${name}\\s+(?:ID\\s+)?=\\s*"([^"]+)"`))?.[1];
+  // Fields are read by name from each one-line module literal; an absent DefaultEnabled is Go's false.
+  const moduleDefinitions = [...moduleSource.matchAll(/^\s*\{(ID: [^\n]*\bKind: Module\b[^\n]*)\},?$/gm)].map(([, body]) => {
+    const field = (name) => body.match(new RegExp(`\\b${name}: ("([^"]*)"|\\w+)`))?.slice(1);
+    const text = (name) => field(name)?.[1];
+    const enabled = field("DefaultEnabled")?.[0];
+    if (enabled !== undefined && enabled !== "true" && enabled !== "false") throw new Error("unsupported module DefaultEnabled");
+    return { id: moduleConstant(field("ID")?.[0]), settingKey: moduleConstant(field("SettingKey")?.[0]), hubPrefix: text("HubPrefix"), hostPrefix: text("HostPrefix"), capability: text("Capability"), agentModule: text("AgentModule"), defaultEnabled: enabled === "true" };
+  });
+  if (moduleDefinitions.length === 0 || moduleDefinitions.some((d) => !d.id || !d.settingKey)) throw new Error("missing module registry producer");
+  manifest.modules = {
+    definitions: moduleDefinitions,
+    refusalCodes: schemas.ModulesModuleProblem.properties.code.enum,
+    routes: Object.entries(document.paths).flatMap(([path, item]) => Object.entries(item)
+      .filter(([, op]) => op?.tags?.includes("Modules"))
+      .map(([method, op]) => ({ method: method.toUpperCase(), path, operationId: op.operationId, sha256: createHash("sha256").update(JSON.stringify(op)).digest("hex") }))),
+    settings: Object.fromEntries(moduleDefinitions.map((d) => [d.settingKey, schemas.SettingsUpdate.properties[d.settingKey]])),
+    minimumContract: 19,
+  };
+  manifest.proxy = {
+    routes: Object.entries(document.paths).flatMap(([path, item]) => Object.entries(item)
+      .filter(([, op]) => op?.tags?.includes("Proxy"))
+      .map(([method, op]) => ({ method: method.toUpperCase(), path, operationId: op.operationId, sha256: createHash("sha256").update(JSON.stringify(op)).digest("hex") }))),
+    schemas: Object.fromEntries(Object.entries(schemas).filter(([name]) => name.startsWith("Proxy"))
+      .map(([name, value]) => [name, { sha256: createHash("sha256").update(JSON.stringify(value)).digest("hex") }])),
+    edgeRoutes: [...readFileSync(new URL("../backend/pkg/libarcane/edge/commands.go", import.meta.url), "utf8").matchAll(/Method:\s*http.Method(\w+),\s*PathPattern:\s*"([^\"]+)",\s*CommandName:\s*"([^\"]+)"/g)]
+      .filter((match) => /^(proxy\.|module\.data\.delete$)/.test(match[3]))
+      .map((match) => ({ method: match[1].toUpperCase(), path: match[2], command: match[3] })),
+    states: schemas.ProxyOperation.properties.state.enum,
+    phases: schemas.ProxyOperation.properties.phase.enum,
+    reasons: schemas.ProxyProblem.properties.code.enum,
+    evidence: schemas.ProxyOperation.properties.evidence.enum,
+  };
   manifest.activityDiscovery = {
     route: `GET ${path}`,
     includeParameter: include,
@@ -278,7 +312,7 @@ function formatFixture(value, depth = 0) {
     return `[\n${value.map((item) => child + formatFixture(item, depth + 1)).join(",\n")}\n${indent}]`;
   }
   if (Object.values(value).every((item) => item === null || typeof item !== "object")) return JSON.stringify(value);
-  if (depth >= 3 && JSON.stringify(value).length <= 300) return JSON.stringify(value);
+  if (depth >= 3 && JSON.stringify(value).length <= 400) return JSON.stringify(value);
   const entries = Object.entries(value);
   if (!entries.length) return "{}";
   return `{\n${entries.map(([key, item]) => `${child}${JSON.stringify(key)}: ${formatFixture(item, depth + 1)}`).join(",\n")}\n${indent}}`;

@@ -28,7 +28,7 @@ export function productionBoundary(): Plugin {
           checkAsset(output.fileName, output.source);
         }
       }
-      const demoCatalog = [...shipped].filter((id) => /\/src\/(?:shared\/preferences\/messages\/(?:de|en)|app\/preview\/messages\/(?:de|en))\.ts$/.test(id));
+      const demoCatalog = [...shipped].filter((id) => /\/src\/(?:shared\/preferences\/messages\/(?:de|en|proxy-lab-de|proxy-lab-en)|app\/preview\/messages\/(?:de|en))\.ts$/.test(id));
       if (demoCatalog.length) this.error(`Production boundary: shipped demo catalogue ${demoCatalog[0].split("/src/").at(-1)}`);
       const sourcePaths = (ids: Iterable<string>) => [...ids].filter((id) => id.includes("/src/") && !id.includes("/node_modules/")).map((id) => `src/${id.split("/src/").at(-1)}`).sort();
       this.emitFile({
