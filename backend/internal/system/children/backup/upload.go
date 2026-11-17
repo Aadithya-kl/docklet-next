@@ -62,7 +62,7 @@ func (s *Service) UploadArchive(ctx context.Context, actor usertypes.Actor, read
 		run.Status, run.ErrorCode = backuptypes.SystemBackupStatusFailed, uploadErrorCode(err)
 		status, code = activitytypes.StatusFailed, run.ErrorCode
 	} else {
-		run.Status = backuptypes.SystemBackupStatusSucceeded
+		run.Status = backuptypes.SystemBackupStatusRunning
 		run.ArchiveName, run.Size, run.ArchiveVersion, run.MigrationVersion = name, info.size, archiveVersion, info.migration
 	}
 	if saveErr := s.store.SaveRun(context.WithoutCancel(workCtx), run); saveErr != nil {
@@ -71,12 +71,16 @@ func (s *Service) UploadArchive(ctx context.Context, actor usertypes.Actor, read
 		}
 		status, code, err = activitytypes.StatusFailed, "backup.failed", errors.New("backup.failed")
 	}
-	_, completeErr := s.activityService.CompleteActivity(workCtx, answer.Run.ID, status, code, nil)
-	if completeErr != nil {
-		return nil, errors.New("backup.failed")
-	}
 	if err != nil {
+		if _, completeErr := s.activityService.CompleteActivity(workCtx, answer.Run.ID, status, code, nil); completeErr != nil {
+			return nil, errors.New("backup.failed")
+		}
 		return nil, err
+	}
+	// Success becomes visible in the transaction that releases the run gate.
+	if committed, _ := s.commitRun(workCtx, run, status, code, nil, nil); !committed {
+		s.discardRun(context.WithoutCancel(workCtx), run)
+		return nil, errors.New("backup.failed")
 	}
 	return &backuptypes.SystemBackupOperation{BackupID: id, ActivityID: answer.Run.ID, Status: string(status)}, nil
 }
