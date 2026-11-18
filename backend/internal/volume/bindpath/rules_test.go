@@ -2,7 +2,7 @@
 // Revision: b9b59ae92f1b09eb828940860971002eab9267b6
 // Retrieved: 2026-11-01
 // License: Apache-2.0
-// Deviations: Original M16 bind identity and admission rules; M16 bind mounts and backup completion.
+// Deviations: Original M16 bind identity and admission rules; M16 bind mounts and backup completion; realistic state destination.
 
 package bindpath
 
@@ -43,6 +43,7 @@ func TestBindSystemAndDockerOverlap(t *testing.T) {
 }
 func TestBindDockletTargetsAndObservedAdmission(t *testing.T) {
 	self := binding("hub", "/srv/docklet", map[string]string{"com.getarcaneapp.arcane": "true"})
+	self.Mounts[0].Destination = "/app/data" // state mount: its whole subtree is protected
 	helper := binding("helper", "/srv/app", volumehelper.Labels())
 	workload := binding("app", "/srv/app", nil)
 	for _, source := range []string{"/srv", "/srv/docklet", "/srv/docklet/data"} {

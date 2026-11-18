@@ -3,7 +3,7 @@ Source: docklet-next/issues/327
 Revision: b9b59ae92f1b09eb828940860971002eab9267b6
 Retrieved: 2026-11-01
 License: Apache-2.0
-Deviations: Original bind-mount path rules, file access and backup rationale.
+Deviations: Original bind-mount path rules, file access and backup rationale; own projects-mount exemption and install-directory protection.
 -->
 
 # Bind mounts: path rules, files and backups
@@ -52,10 +52,20 @@ below or above, compared segment-wise (`/etcetera` does not overlap `/etc`).
 | Rule | Refuses | Code |
 | --- | --- | --- |
 | R1 system | `/` and any path overlapping `/proc`, `/sys`, `/dev`, `/etc`, `/run`, `/var/run`, `/boot`, `/var/lib/docker`, `/var/lib/containerd` or the daemon's `DockerRootDir`; ancestors are refused too, so `/var/lib` or `/srv` above a Docker root under `/srv/engine` is denied | `422 volume.bind.path-denied` (`reason: system` or `docker`) |
-| R2 Docklet | a path overlapping a bind source of a Docklet hub or agent container (self labels) or the host path of a stored local or mount backup target of that host, including retired targets | `422 volume.bind.path-denied` (`reason: docklet`) |
+| R2 Docklet | a path overlapping the Compose working directory (install directory) of a Docklet hub or agent container (self labels), or one of its state mounts (destination `/app/data`, `/var/lib/docklet` or the Docker socket) with everything below it, or the root or an ancestor of any other bind mount of that container; or the host path of a stored local or mount backup target of that host, including retired targets. Stack data below a Docklet container's projects mount therefore stays eligible | `422 volume.bind.path-denied` (`reason: docklet`) |
 | R3 observed | a key without stored policy, backup or restore rows that no workload container on the host (any state) currently bind-mounts with exactly that source | `404 volume.bind.not-mounted` |
 | R4 type | a source that is missing, or neither a directory nor a regular file (socket, device, FIFO), found by the source witness (§2.1) | `404 volume.bind.source-missing`, `422 volume.bind.unsupported-type` |
 
+- **Docklet mounts**: the agent installer and the README layout put Docklet's own
+  directory inside the projects directory and mount that directory at the same path.
+  Their Compose files label every service `io.docklet.system` (`agent` or `hub`), so the
+  projects scan skips that directory and never stores it as a stack. Docklet hides its own
+  containers and Compose project, protects its install directory
+  and state mounts completely, and treats any other mount only as a boundary: its root and
+  ancestors are refused, its contents are ordinary stack data. Restore applies the same
+  rule before refusing with `409 volume.restore.self-mounted`. Keep Docklet's own secret
+  files (for example `ENCRYPTION_KEY_FILE`) in its install or data directory, not in a
+  stack directory.
 - **Workload container**: any container that is not a Docklet hub or agent container and
   not a Docklet operation helper. Operation helpers are the workspace helper, backup
   engine, restore writer, source witness and target probe containers; they carry the

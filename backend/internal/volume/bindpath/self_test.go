@@ -2,7 +2,7 @@
 // Revision: 20a03b67fbeb6bcc82c758e6f2ece937d58f037a
 // Retrieved: 2026-11-03
 // License: Apache-2.0
-// Deviations: Original regression for Docklet's own hub and agent labels in the bind self rule (M16 review CA-1).
+// Deviations: Original regression for Docklet's own hub and agent labels in the bind self rule (M16 review CA-1); realistic hub state destination.
 
 package bindpath
 
@@ -20,6 +20,7 @@ import (
 func TestBindRefusesDockletContainersByTheirOwnLabels(t *testing.T) {
 	agent := binding("agent", "/opt/docklet-agent/data", map[string]string{"io.docklet.system": "agent", "com.getarcaneapp.arcane.hidden": "true"})
 	hub := binding("hub", "/srv/docklet-hub/data", map[string]string{"io.docklet.system": "hub"})
+	hub.Mounts[0].Destination = "/app/data" // a state mount protects everything below it
 	for _, tc := range []struct {
 		source string
 		owner  container.Summary

@@ -2,7 +2,7 @@
 // Revision: b9b59ae92f1b09eb828940860971002eab9267b6
 // Retrieved: 2026-11-01
 // License: Apache-2.0
-// Deviations: Original M16 bind identity and admission rules; M16 bind mounts and backup completion.
+// Deviations: Original M16 bind identity and admission rules; M16 bind mounts and backup completion; Docklet mounts protect state, install directory and mount roots.
 
 package bindpath
 
@@ -64,7 +64,7 @@ func Rules(source, dockerRoot string, rows []container.Summary, targets []string
 		}
 	}
 	for _, c := range rows {
-		if Self(c) && Uses(c, source, true) {
+		if Self(c) && Protects(c, source) {
 			return deny("docklet")
 		}
 	}

@@ -2,7 +2,7 @@
 // Revision: 095cb778daba1034e2a39961199e712a75d4ba29
 // Retrieved: 2026-10-13
 // License: BSD-3-Clause
-// Deviations: SQLite service transaction policy; split the adopted service to keep files below 1,000 lines; local module namespace; functional cut: removed central variables and .env.global; functional cut: removed GitOps and saved Git repositories; SQLite-only local persistence; M14 container and host operation contracts.
+// Deviations: SQLite service transaction policy; split the adopted service to keep files below 1,000 lines; local module namespace; functional cut: removed central variables and .env.global; functional cut: removed GitOps and saved Git repositories; SQLite-only local persistence; M14 container and host operation contracts. Docklet's own projects excluded from update rows and counts.
 
 package project
 
@@ -18,6 +18,7 @@ import (
 	"github.com/florianfinn/docklet-next/backend/internal/project/children/listing"
 	projectsync "github.com/florianfinn/docklet-next/backend/internal/project/children/sync"
 	"github.com/florianfinn/docklet-next/backend/internal/project/children/tags"
+	"github.com/florianfinn/docklet-next/backend/pkg/inventory"
 	"github.com/florianfinn/docklet-next/backend/pkg/libarcane"
 	"github.com/florianfinn/docklet-next/backend/pkg/pagination"
 	"github.com/florianfinn/docklet-next/backend/pkg/projects"
@@ -182,17 +183,8 @@ func (s *ProjectService) ListProjects(ctx context.Context, params pagination.Que
 		return nil, pagination.Response{}, ownerErr
 	}
 	query := s.db.WithContext(ctx).Model(&Project{})
-	systemNames := listing.SystemProjectNames(snapshot.Containers)
-	if len(systemNames) > 0 {
-		var systemIDs []string
-		for _, identity := range identities {
-			if slices.Contains(systemNames, listing.ObservedComposeName(identity)) {
-				systemIDs = append(systemIDs, identity.ID)
-			}
-		}
-		if len(systemIDs) > 0 {
-			query = query.Where("id NOT IN ?", systemIDs)
-		}
+	if systemIDs := systemProjectIDs(snapshot.Containers, identities); len(systemIDs) > 0 {
+		query = query.Where("id NOT IN ?", systemIDs)
 	}
 	if archivedFilter := strings.TrimSpace(params.Filters["archived"]); !strings.EqualFold(archivedFilter, "all") {
 		archived, _ := kit.ParseBool(archivedFilter)
@@ -291,7 +283,7 @@ func (s *ProjectService) ListProjects(ctx context.Context, params pagination.Que
 					knownProjects = projectsArray
 				}
 				known := listing.KnownComposeProjectNames(projectRecords(knownProjects))
-				items = append(items, s.listing.DiscoveredUpdateRows(ctx, snapshot.Containers, known, IconCatalogForContext(ctx))...)
+				items = append(items, s.listing.DiscoveredUpdateRows(ctx, withoutSystemContainers(snapshot.Containers), known, IconCatalogForContext(ctx))...)
 			}
 		}
 	}
@@ -354,17 +346,18 @@ func (s *ProjectService) CountProjectsWithPendingUpdates(ctx context.Context, al
 		return 0, fmt.Errorf("failed to list projects for update count: %w", err)
 	}
 
+	// Docklet's own hub and agent projects are hidden stacks; they never count as pending updates.
+	containersByProject := listing.GroupComposeContainersByProject(allContainers)
+	owners := listing.ComposeProjectOwners(projectRecords(allProjects))
 	activeProjects := make([]Project, 0, len(allProjects))
 	for _, proj := range allProjects {
-		if !proj.IsArchived {
+		if !proj.IsArchived && !slices.ContainsFunc(listing.ProjectContainers(projectRecord(proj), containersByProject, owners), func(c container.Summary) bool { return inventory.IsSystem(c.Labels) }) {
 			activeProjects = append(activeProjects, proj)
 		}
 	}
 
 	// Runtime container IDs keep tag-policy updates scoped to their project.
 	details := make([]projecttypes.Details, len(activeProjects))
-	containersByProject := listing.GroupComposeContainersByProject(allContainers)
-	owners := listing.ComposeProjectOwners(projectRecords(allProjects))
 	for i, proj := range activeProjects {
 		details[i].ID = proj.ID
 		for _, c := range listing.ProjectContainers(projectRecord(proj), containersByProject, owners) {
@@ -392,7 +385,7 @@ func (s *ProjectService) CountProjectsWithPendingUpdates(ctx context.Context, al
 	}
 
 	visibleContainers := make([]container.Summary, 0, len(allContainers))
-	for _, c := range allContainers {
+	for _, c := range withoutSystemContainers(allContainers) {
 		hidden, _ := kit.ParseBool(c.Labels[libarcane.HiddenResourceLabel])
 		if !hidden {
 			visibleContainers = append(visibleContainers, c)
@@ -591,6 +584,12 @@ func (s *ProjectService) SyncProjectsFromFileSystem(ctx context.Context) error {
 			deletions = append(deletions, projectCleanupDecision{project: p, reason: "removed internal Arcane scratch record (project-update temp dir)"})
 			continue
 		}
+		// Docklet's own labelled install directory is skipped by the scan; a record stored by an
+		// earlier scan is removed (files and containers stay untouched).
+		if projects.IsDockletInstallDirectory(ctx, projectsDir, p.Path) {
+			deletions = append(deletions, projectCleanupDecision{project: p, reason: "removed record of Docklet's own install directory"})
+			continue
+		}
 		if rel := listing.RelativePath(projectsDir, p.Path); rel != "" && projects.PathContainsSnapshotDirectory(rel) {
 			deletions = append(deletions, projectCleanupDecision{project: p, reason: "removed project inside a filesystem snapshot/trash directory"})
 			continue
@@ -786,4 +785,29 @@ func (s *ProjectService) reconcileComposeTagsForProject(ctx context.Context, pro
 		return nil
 	}
 	return s.reconcileComposeProjectTags(ctx, projectModel.ID, meta.ProjectTags)
+}
+
+// withoutSystemContainers drops every container of Docklet's own hub and agent Compose projects,
+// including unlabelled sibling services, so they never form update rows or counts.
+func withoutSystemContainers(containers []container.Summary) []container.Summary {
+	names := listing.SystemProjectNames(containers)
+	out := make([]container.Summary, 0, len(containers))
+	for _, c := range containers {
+		if !inventory.IsSystem(c.Labels) && !slices.Contains(names, docker.ComposeProjectLabel(c.Labels)) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// systemProjectIDs lists stored projects that are Docklet's own hub or agent stacks.
+func systemProjectIDs(containers []container.Summary, identities []projecttypes.Record) []string {
+	systemNames := listing.SystemProjectNames(containers)
+	var ids []string
+	for _, identity := range identities {
+		if slices.Contains(systemNames, listing.ObservedComposeName(identity)) {
+			ids = append(ids, identity.ID)
+		}
+	}
+	return ids
 }
