@@ -33,7 +33,7 @@ function adapter(mode: AuthMode, completed: boolean, change: boolean, authentica
     if (allowLogin && path === "/api/auth/login") { signedIn = true; return json({ user: user() }); }
     if (allowLogin && path === "/api/auth/password") { needsChange = false; return json({ message: "changed" }); }
     if (path === "/api/auth/password" || path === "/api/auth/login") return new Response("{}", { status: 401 });
-    if (path === "/api/environments/0/settings") return new Response(JSON.stringify(Object.entries({ setupCompleted: String(completed), hubName: "Docklet", hubAddress: "192.0.2.10:8080", domainUrl: "", linkBase: "auto", effectiveTimeZone: "UTC", keepActionOutput: "true", actionPresentation: "dialog" }).map(([key, value]) => ({ key, value }))));
+    if (path === "/api/environments/0/settings" || path === "/api/environments/0/settings/public") return new Response(JSON.stringify(Object.entries({ setupCompleted: String(completed), hubName: "Docklet", hubAddress: "192.0.2.10:8080", domainUrl: "", linkBase: "auto", effectiveTimeZone: "UTC", keepActionOutput: "true", actionPresentation: "dialog", defaultHostConnection: "direct", agentProjectsDirectory: "/srv/projects", agentInstallDirectory: "/srv/projects/docklet-agent", defaultPuid: "", defaultPgid: "", detectSocketGroup: "true" }).map(([key, value]) => ({ key, value }))));
     return new Response("{}", { status: 503 });
   } });
 }
@@ -61,7 +61,7 @@ it.each(states)("terminates both entry routes for $mode completed=$completed cha
       if (authenticated) {
         if (expectedPath === "/dashboard") expect(screen.queryByText("Dashboard terminal") !== null).toBe(true);
         else if (completed && needsPassword) expect(screen.queryByLabelText("Bisheriges Passwort") !== null).toBe(true);
-        else expect(screen.queryByLabelText("Interne Hub-Adresse") !== null).toBe(true);
+        else expect(screen.queryByLabelText("IP-Adresse") !== null).toBe(true);
       } else if (mode === "local") expect(screen.queryByLabelText("Benutzername") !== null).toBe(true);
       else expect(document.body.textContent).toMatch(mode === "proxy" ? /Proxy/ : /nicht/);
     });

@@ -19,7 +19,7 @@ import { onboardingStore } from "./onboarding-store";
 const settings = { hubName: "Example hub", hubAddress: "192.0.2.10:3552", domainUrl: "https://hub.example.com", linkBase: "auto", effectiveTimeZone: "UTC", keepActionOutput: "true", actionPresentation: "dialog", defaultHostConnection: "direct", agentProjectsDirectory: "/srv/projects", agentInstallDirectory: "/srv/projects/docklet-agent", defaultPuid: "", defaultPgid: "", detectSocketGroup: "true" };
 const row = { id: "example", name: "Example", color: null, registrationRevision: 1, apiUrl: "http://agent.example.com:3552", enabled: true, isEdge: false, status: "pending" };
 
-function server(admin = true) {
+function server(admin = true, ipAppUrl = false) {
   const writes: Record<string, unknown>[] = [];
   const requests: string[] = [];
   let registered = false;
@@ -34,7 +34,7 @@ function server(admin = true) {
       if (path === "/api/auth/me") return json({ id: "example", username: "Example", requiresPasswordChange: false });
       if (path === "/api/auth/mode") return json({ mode: "none" });
       if (path.endsWith("/settings")) return new Response(JSON.stringify(Object.entries(settings).map(([key, value]) => ({ key, value }))));
-      if (path === "/api/hub/discovery") return json({ detectedAt: "2026-10-17T12:00:00Z", agentImage: "registry.example.com/docklet/agent:1.2.3", candidates: [{ id: "public", url: "https://hub.example.com", source: "configured", reach: "unknown" }, { id: "internal", url: "http://192.0.2.10:3552", source: "interface", reach: "unknown" }] });
+      if (path === "/api/hub/discovery") return json({ detectedAt: "2026-10-17T12:00:00Z", agentImage: "registry.example.com/docklet/agent:1.2.3", containerDetection: "container", container: { name: "docklet-hub", listenPort: 3552, networks: [{ name: "bridge", driver: "bridge" }], publishedPorts: [{ hostIp: "", hostPort: 3552 }] }, candidates: [{ id: "public", url: "https://hub.example.com", kind: "domain", source: "configured", reach: "unknown" }, ...(ipAppUrl ? [{ id: "app-url", url: "https://192.0.2.20", kind: "ip", source: "configured", reach: "unknown" }] : []), { id: "internal", url: "http://192.0.2.10:3552", kind: "ip", source: ipAppUrl ? "configured" : "published", reach: "unknown" }] });
       if (path === "/api/environments" && init?.method === "POST") {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>;
         writes.push(body);
@@ -59,9 +59,10 @@ it.each(["direct", "edge"] as const)("creates a live %s host before rendering in
   expect(screen.queryByTestId("agent-token") === null).toBe(true);
   if (connection === "edge") {
     await userEvent.click(screen.getByRole("radio", { name: /Edge/ }));
-    expect((screen.getByLabelText("Interne Hub-Adresse für den Agent") as HTMLInputElement).value).toBe("https://hub.example.com");
-    await userEvent.click(screen.getByRole("button", { name: /http:\/\/192.0.2.10/ }));
+    // Agents usually sit in the LAN: the reachable IP candidate is the default, the domain stays selectable.
     expect((screen.getByLabelText("Interne Hub-Adresse für den Agent") as HTMLInputElement).value).toBe("http://192.0.2.10:3552");
+    await userEvent.click(screen.getByRole("button", { name: /https:\/\/hub.example.com/ }));
+    expect((screen.getByLabelText("Interne Hub-Adresse für den Agent") as HTMLInputElement).value).toBe("https://hub.example.com");
   } else await userEvent.type(document.querySelector<HTMLInputElement>("#host-address")!, "agent.example.com");
   await userEvent.click(screen.getByRole("button", { name: "Weiter" }));
   await userEvent.click(await screen.findByRole("button", { name: "Host anlegen und auf Agent warten" }));
@@ -104,4 +105,13 @@ it("shows a rotated token once and clears it when the result dialog closes", asy
   await userEvent.click(screen.getByRole("button", { name: "Token rotieren" }));
   expect(screen.queryByText("test-only") === null).toBe(true);
   expect(f.rotations()).toBe(1);
+});
+
+// APP_URL may be an IP and precedes hubAddress in the producer.
+it("keeps the saved agent address ahead of an IP APP_URL", async () => {
+ const f = server(true, true);
+ renderRoutes([{ path: "/hosts/new", element: <OnboardingPage /> }], ["/hosts/new"], f.adapter);
+ await screen.findByLabelText("Hostname in Docklet");
+ await userEvent.click(screen.getByRole("radio", { name: /Edge/ }));
+ expect((screen.getByLabelText("Interne Hub-Adresse für den Agent") as HTMLInputElement).value).toBe("http://192.0.2.10:3552");
 });

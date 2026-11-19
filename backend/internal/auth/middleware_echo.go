@@ -2,7 +2,7 @@
 // Revision: 095cb778daba1034e2a39961199e712a75d4ba29
 // Retrieved: 2026-10-13
 // License: BSD-3-Clause
-// Deviations: Split Echo middleware; local module namespace; removed OIDC/passkeys; startup sign-in modes and shared reserved synthetic agent identity; session-bound viewer lifetime and durable validation; M15 simple-user rights and identity contracts; clear expired browser sessions and their presence hints; remove dead token-version mismatch handling.
+// Deviations: Split Echo middleware; local module namespace; removed OIDC/passkeys; startup sign-in modes and shared reserved synthetic agent identity; session-bound viewer lifetime and durable validation; M15 simple-user rights and identity contracts; clear expired browser sessions and their presence hints; remove dead token-version mismatch handling; M29 policy snapshot before authentication.
 
 package auth
 
@@ -96,6 +96,7 @@ func (m *AuthMiddleware) WithAdminRequired() *AuthMiddleware {
 func (m *AuthMiddleware) Add() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
+			c.SetRequest(c.Request().WithContext(m.authService.WithPolicySnapshot(c.Request().Context())))
 			reqCtx := c.Request().Context()
 			if m.cfg != nil && m.cfg.AgentMode {
 				return m.agentAuth(reqCtx, c, next)
@@ -161,11 +162,11 @@ func (m *AuthMiddleware) managerAuth(ctx context.Context, c *echo.Context, next 
 	}
 
 	// First, check for API key in X-API-Key header
-	if m.authService.SignInMode() != "local" {
+	if policy := m.authService.CurrentPolicy(); !policy.LocalActive() {
 		if env, ok := m.resolveEnvironmentAccessToken(ctx, req.Header.Get(middleware.HeaderApiKey)).Get(); ok {
 			return m.authorizeAndContinueInternal(c, next, environmentScopedInternal(c, env))
 		}
-		requestUser, err := m.authService.ModeRequestUser(ctx, req)
+		requestUser, err := m.authService.modeRequestUserInternal(ctx, req, policy)
 		if err != nil {
 			status, code := modeAuthError(err)
 			return c.JSON(status, common.APIError{Code: common.APIErrorCode(code), Message: code})

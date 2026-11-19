@@ -2,7 +2,7 @@
 // Revision: 095cb778daba1034e2a39961199e712a75d4ba29
 // Retrieved: 2026-10-13
 // License: BSD-3-Clause
-// Deviations: Local module namespace; functional cut: removed central variables and .env.global; functional cut: removed GitOps and saved Git repositories; functional cut: removed Swarm; functional cut: removed standalone build workshop; functional cut: removed OIDC and passkeys; SQLite-only local persistence.; Uses forward-only database initialization; exits on actor-host loss; agents withhold server failures caused by their shutdown.
+// Deviations: Local module namespace; functional cut: removed central variables and .env.global; functional cut: removed GitOps and saved Git repositories; functional cut: removed Swarm; functional cut: removed standalone build workshop; functional cut: removed OIDC and passkeys; SQLite-only local persistence.; Uses forward-only database initialization; exits on actor-host loss; agents withhold server failures caused by their shutdown; M29 first administrator from setup and post-claim key reconciliation.
 
 package bootstrap
 
@@ -325,9 +325,8 @@ func initializeStartupState(p initializeStartupStateParams) error {
 
 	startup.InitializeNonAgentFeatures(appCtx, runtimeCfg,
 		p.Role.EnsureBuiltInRoles,
-		func(ctx context.Context) error {
-			return p.User.CreateDefaultAdmin(ctx)
-		},
+		// The first administrator is created by first-run setup (POST /api/setup/identity).
+		func(context.Context) error { return nil },
 		func(ctx context.Context) error {
 			return p.ApiKey.ReconcileDefaultAdminAPIKey(ctx, runtimeCfg.AdminStaticAPIKey)
 		},
@@ -338,6 +337,7 @@ func initializeStartupState(p initializeStartupStateParams) error {
 	)
 	startup.CleanupUnknownSettings(appCtx, p.Settings)
 	if !cfg.AgentMode {
+		p.Auth.SetAfterClaim(staticKeyAfterClaimInternal(p.ApiKey, p.Role, runtimeCfg.AdminStaticAPIKey))
 		if err := p.Auth.InitializeSignIn(appCtx); err != nil {
 			return fmt.Errorf("initialize sign-in: %w", err)
 		}
@@ -511,4 +511,19 @@ func initializeDBAndMigrateInternal(ctx context.Context, cfg *config.Config) (*d
 
 	slog.InfoContext(ctx, "Database initialized successfully")
 	return db, nil
+}
+
+// staticKeyAfterClaimInternal makes the configured static admin key usable right after the claim:
+// create it, seed its grants and drop cached permissions.
+func staticKeyAfterClaimInternal(keys *apikey.ApiKeyService, roles *role.RoleService, raw string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if err := keys.ReconcileDefaultAdminAPIKey(ctx, raw); err != nil {
+			return err
+		}
+		if err := keys.BackfillApiKeyPermissions(ctx); err != nil {
+			return err
+		}
+		roles.InvalidateAllPermissions()
+		return nil
+	}
 }

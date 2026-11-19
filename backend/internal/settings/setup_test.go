@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/florianfinn/docklet-next/backend/internal/config"
 	"github.com/florianfinn/docklet-next/backend/internal/database"
 	"github.com/florianfinn/docklet-next/backend/internal/middleware"
@@ -22,21 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
-
-func TestSetupCompletionRequiresChangedInitialPassword(t *testing.T) {
-	ctx := t.Context()
-	db := setupSettingsTestDB(t)
-	require.NoError(t, db.Exec("CREATE TABLE users (id TEXT PRIMARY KEY, requires_password_change BOOLEAN NOT NULL)").Error)
-	require.NoError(t, db.Exec("INSERT INTO users (id, requires_password_change) VALUES (?, ?)", "admin", true).Error)
-	svc, err := newSettingsServiceForTestInternal(t, ctx, db)
-	require.NoError(t, err)
-	handler := &SettingsHandler{settingsService: svc}
-	actor := context.WithValue(ctx, middleware.ContextKeyUserID, "admin")
-	input := settingstypes.Update{SetupCompleted: new("true")}
-	require.ErrorContains(t, handler.validateSettingsUpdateInput(actor, input), "Change the initial administrator password")
-	require.NoError(t, db.Exec("UPDATE users SET requires_password_change = ? WHERE id = ?", false, "admin").Error)
-	require.NoError(t, handler.validateSettingsUpdateInput(actor, input))
-}
 
 func TestSetupSettingsPersistAcrossServiceRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hub.db")
@@ -92,7 +79,7 @@ func TestSetupDefaultHostDirectoriesDoNotTouchHubProjects(t *testing.T) {
 	require.Equal(t, "true", stored.SetupCompleted.Value)
 }
 
-func TestSetupCompletionSignInModeGate(t *testing.T) {
+func TestSetupCompletionHasNoInitialPasswordGate(t *testing.T) {
 	for _, mode := range []string{"local", "none", "proxy"} {
 		t.Run(mode, func(t *testing.T) {
 			db := setupSettingsTestDB(t)
@@ -104,16 +91,8 @@ func TestSetupCompletionSignInModeGate(t *testing.T) {
 			input := &UpdateSettingsInput{EnvironmentID: "0", Body: settingstypes.Update{SetupCompleted: new("true")}}
 			actor := context.WithValue(t.Context(), middleware.ContextKeyUserID, "admin")
 			_, err = handler.UpdateSettings(actor, input)
-			if mode == "local" {
-				require.ErrorContains(t, err, "Change the initial administrator password")
-				_, err = handler.UpdateSettings(t.Context(), input)
-				require.ErrorContains(t, err, "Sign-in required")
-				require.NoError(t, db.Exec("UPDATE users SET requires_password_change = ?", false).Error)
-				_, err = handler.UpdateSettings(actor, input)
-				require.NoError(t, err)
-			} else {
-				require.NoError(t, err)
-			}
+			// The first administrator is created in setup; completion no longer waits for a password change.
+			require.NoError(t, err)
 		})
 	}
 }
@@ -139,4 +118,32 @@ func TestSettingsReadEffectiveTimeZoneFromProcessTZ(t *testing.T) {
 			require.Contains(t, values, "timeZone")
 		})
 	}
+}
+
+func TestSettingsPutRefusesStoredSignInKeys(t *testing.T) {
+	svc, err := newSettingsServiceForTestInternal(t, t.Context(), setupSettingsTestDB(t))
+	require.NoError(t, err)
+	_, api := humatest.New(t)
+	api.UseMiddleware(func(ctx huma.Context, next func(huma.Context)) {
+		next(huma.WithContext(ctx, context.WithValue(ctx.Context(), middleware.ContextKeyUserPermissions, authz.SudoPermissionSet())))
+	})
+	RegisterSettings(api, svc, nil, &config.Config{})
+	require.Equal(t, 200, api.Put("/environments/0/settings", map[string]string{"hubName": "Example Hub"}).Code, "an ordinary key reaches the handler")
+	for _, key := range []string{"authMode", "authProxyHeader", "authTrustedProxies", "setupIdentity"} {
+		resp := api.Put("/environments/0/settings", map[string]string{key: "none"})
+		// The stored policy keys are not part of the settings schema, so the request fails validation.
+		require.Equal(t, 422, resp.Code, "%s: %s", key, resp.Body.String())
+		stored, err := svc.GetSettings(t.Context())
+		require.NoError(t, err)
+		for _, value := range []string{stored.AuthMode.Value, stored.AuthProxyHeader.Value, stored.AuthTrustedProxies.Value, stored.SetupIdentity.Value} {
+			require.Empty(t, value, "the generic settings write must never reach %s", key)
+		}
+	}
+}
+
+// A fresh hub's stored defaults equal the wizard's first-run values, since the connected wizard starts from them.
+func TestSetupFreshHubDefaultsMatchTheWizard(t *testing.T) {
+	d := DefaultSettingsConfig()
+	require.Equal(t, []string{"Docklet", "", "", "auto", "/home/docker", "/home/docker/docklet-agent", "direct", "true"},
+		[]string{d.HubName.Value, d.HubAddress.Value, d.DomainURL.Value, d.LinkBase.Value, d.AgentProjectsDirectory.Value, d.AgentInstallDirectory.Value, d.DefaultHostConnection.Value, d.DetectSocketGroup.Value})
 }

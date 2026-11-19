@@ -11,7 +11,7 @@ import { formatPercentNumber, withPercent } from "@/domain/locale";
 import LoginPage from "@/features/auth/login/LoginPage";
 import { FlowsSection } from "@/features/design-lab/ControlsSection";
 import SetupPage from "@/features/setup/SetupPage";
-import { restartSetup } from "@/features/setup/setup-draft";
+import { restartSetup, setupStore } from "@/features/setup/setup-draft";
 import { useScheduleText } from "@/shared/components/schedule/use-schedule-text";
 import { renderRoutes, renderWithApp } from "@/test/render";
 
@@ -57,13 +57,14 @@ describe("language switch", () => {
 
   it("runs first-run setup in English, including validation and help buttons", async () => {
     restartSetup();
-    renderRoutes([{ path: "/setup", element: <SetupPage /> }], ["/setup"]);
+    setupStore.set((d) => ({ ...d, reached: 1 }));
+    renderRoutes([{ path: "/setup", element: <SetupPage /> }], ["/setup?step=hub"]);
     await switchTo("English (US)");
-    await waitFor(() => expect((screen.getByLabelText("Internal hub address") as HTMLInputElement).value).toBe("192.0.2.10:8080"));
-    await userEvent.clear(screen.getByLabelText("Internal hub address"));
+    await waitFor(() => expect((screen.getByLabelText("IP address") as HTMLInputElement).value).toBe("192.0.2.10:8080"));
+    await userEvent.clear(screen.getByLabelText("IP address"));
     await userEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByText("Check 1 field") !== null).toBe(true);
-    expect(screen.getByRole("button", { name: "Explanation: Internal hub address" }) !== null).toBe(true);
+    expect(screen.getByRole("button", { name: "Explanation: IP address" }) !== null).toBe(true);
   });
 
   it("offers the switch in hub settings as a browser preference and in the design lab flows", async () => {
