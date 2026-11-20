@@ -36,6 +36,7 @@ func Snapshot(b []byte, present bool) Bytes {
 }
 
 type Intent struct {
+	Kind          dto.OperationKind `json:"kind,omitempty"`
 	Request       dto.ApplyRequest  `json:"request"`
 	Old           Bytes             `json:"old"`
 	New           Bytes             `json:"new"`
@@ -71,6 +72,8 @@ type Runtime interface {
 	Rebind(context.Context, dto.Instance) (dto.Instance, error)
 }
 type Observation struct {
+	Certificate *dto.CertificateObservation
+	Probe       *dto.ProbeEvidence
 	State       dto.State
 	Reason      dto.Reason
 	Evidence    dto.EvidenceKind
@@ -109,6 +112,10 @@ func (e Engines) For(k dto.Kind) (Engine, error) {
 	return v, nil
 }
 func Digest(r dto.ApplyRequest) (string, error) {
+	// Explicit route and the legacy absent discriminator identify the same request.
+	if r.Kind.Effective() == dto.RouteOperation {
+		r.Kind = ""
+	}
 	b, err := json.Marshal(r, json.Deterministic(true))
 	if err != nil {
 		return "", err
@@ -120,6 +127,9 @@ func Digest(r dto.ApplyRequest) (string, error) {
 var safeID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 
 func validRequest(r dto.ApplyRequest) error {
+	if r.Kind.Effective() != dto.RouteOperation {
+		return dto.Fail(dto.UnknownOperationKind, 409)
+	}
 	if !safeID.MatchString(r.ID) || r.Instance.ID == "" || r.Generation == "" || r.Registration == "" || r.Instance.Source.Canonical == "" {
 		return dto.Fail(dto.InvalidInput, 422)
 	}

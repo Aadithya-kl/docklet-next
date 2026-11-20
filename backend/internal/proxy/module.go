@@ -83,6 +83,13 @@ func NewModule(db *database.DB, cfg *config.Config, mods *modules.Service, s *se
 // engines with Runtime and register their kind; runtime and agent share this map.
 func (m *Module) RegisterEngine(kind dto.Kind, e Engine) { m.Agent.Engines[kind] = e }
 func (m *Module) Start(ctx context.Context) error {
+	// Leftover probe containers are best-effort cleanup; a hub without a
+	// reachable Docker daemon must still start.
+	if m.Runtime != nil && m.Runtime.Docker != nil {
+		if err := m.Runtime.SweepProbes(ctx); err != nil {
+			slog.WarnContext(ctx, "Proxy probe cleanup deferred", "error", err)
+		}
+	}
 	if err := m.Agent.Settle(ctx); err != nil {
 		return err
 	}
@@ -275,6 +282,9 @@ func (m *Module) CreateInstance(ctx context.Context, q dto.CreateInstanceRequest
 	if !found {
 		return i, dto.Fail(dto.ContainerChanged, 409)
 	}
+	if err := revalidateSource(i.Source, i.RouteDirectory); err != nil {
+		return i, err
+	}
 	i.ID = uuid.NewString()
 	i.Registration, err = m.Transport.Registration(ctx, i.EnvironmentID)
 	if err != nil {
@@ -315,6 +325,9 @@ func (m *Module) UpdateInstance(ctx context.Context, id string, s dto.Settings) 
 		return i, dto.Fail(dto.ModuleBusy, 409)
 	}
 	if !missing(err) {
+		return i, err
+	}
+	if err := m.revalidateSettings(ctx, i); err != nil {
 		return i, err
 	}
 	inv, err := m.Transport.Inventory(ctx, i)

@@ -14,7 +14,7 @@ import (
 func TestAgentCompatibilityAndRecoveryRoutes(t *testing.T) {
 	require.True(t, AgentCompatible(AgentHubVersion, AgentHubFingerprint))
 	require.True(t, AgentCompatible(19, AgentHubV19Fingerprint))
-	require.True(t, ModuleCompatible(19, AgentHubV19Fingerprint))
+	require.False(t, ModuleCompatible(19, AgentHubV19Fingerprint), "M28 changed the proxy module surface")
 	require.False(t, AgentCompatible(19, AgentHubFingerprint))
 	require.False(t, AgentCompatible(MinimumAgentVersion-1, AgentHubFingerprint))
 	require.False(t, AgentCompatible(AgentHubVersion, "different"))

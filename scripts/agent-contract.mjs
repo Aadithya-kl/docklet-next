@@ -41,9 +41,11 @@ export function agentFixture(spec, fixture) {
       .filter(([, op]) => op?.tags?.includes("Modules"))
       .map(([method, op]) => ({ method: method.toUpperCase(), path, operationId: op.operationId, sha256: createHash("sha256").update(JSON.stringify(op)).digest("hex") }))),
     settings: Object.fromEntries(moduleDefinitions.map((d) => [d.settingKey, schemas.SettingsUpdate.properties[d.settingKey]])),
-    minimumContract: 19,
+    minimumContract: 20,
   };
   manifest.proxy = {
+    dnsProviders: document["x-proxy-dns-providers"],
+    minimumContract: 20,
     routes: Object.entries(document.paths).flatMap(([path, item]) => Object.entries(item)
       .filter(([, op]) => op?.tags?.includes("Proxy"))
       .map(([method, op]) => ({ method: method.toUpperCase(), path, operationId: op.operationId, sha256: createHash("sha256").update(JSON.stringify(op)).digest("hex") }))),

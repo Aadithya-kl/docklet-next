@@ -294,14 +294,14 @@ final state. Without a plain HTTP entry point, or when the marker never answers,
 the outcome is `applied-unverified` (`no-observable-difference` or
 `not-observable`). For Caddy without a readback (`admin off`), the same cases
 are `applied-unverified`. No `wget`, a missing option or an unreadable admin
-endpoint gives the matching reason. A Traefik HTTPS probe uses
-`--no-check-certificate` and sees Traefik's default certificate: it is routing
-evidence, never certificate evidence. Certificate validity and issuance are never
-claimed.
+endpoint gives the matching reason. The tools helper reports HTTPS routing evidence independently from certificate
+verification. The UI says “served certificate observed at <time>” and reports chain
+trust, hostname match and validity separately; it never claims issuance by a resolver.
+The wget fallback skips certificate checking and says that the probe helper is unavailable.
 
-The deadline for Traefik is twice the discovered provider throttle plus 10 s
-(default throttle 2 s → 14 s; B0 measured up to 2.4 s including helper start);
-for Caddy 5 s after the reload. Logs are read from `publishing` onward within the
+The deadline for Traefik is twice the discovered provider throttle plus 12 s
+(10 s plus 2 s helper allowance; default throttle 2 s → 16 s; B0 measured up to
+2.4 s including helper start); for Caddy 7 s after the reload (5 s plus 2 s). Logs are read from `publishing` onward within the
 fenced epoch; a restart (same ID, new `StartedAt`) or a recreation (new ID) ends
 observation with `applied-unverified` (`container-changed`). Missing, rotated or
 file-driver logs are `logs-unavailable`, never "no error".

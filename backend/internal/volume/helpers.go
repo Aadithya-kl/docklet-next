@@ -13,7 +13,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"time"
@@ -34,7 +33,6 @@ import (
 	"github.com/florianfinn/docklet-next/backend/pkg/libarcane"
 	"github.com/florianfinn/docklet-next/backend/pkg/libarcane/timeouts"
 	"github.com/florianfinn/docklet-next/backend/pkg/libarcane/volumehelper"
-	"github.com/florianfinn/docklet-next/types/user"
 	volumetypes "github.com/florianfinn/docklet-next/types/volume"
 )
 
@@ -134,27 +132,37 @@ func (s *VolumeService) getVolumeHelperImageInternal(ctx context.Context, docker
 		}
 	}
 
-	toolsImage := s.toolsImageInternal()
-
-	if _, imageInspectErr := dockerClient.ImageInspect(ctx, toolsImage); imageInspectErr == nil {
-		slog.InfoContext(ctx, "volume service: helper image strategy selected", "strategy", "tools-local", "image", toolsImage)
-		return toolsImage, nil
+	ref := s.toolsImageInternal()
+	defer s.BeginHelperPull(ref)()
+	image, err := volumehelper.Resolve(ctx, dockerClient, ref, s.HelperPullOptions)
+	if err == nil && image.Pulled {
+		s.RecordHelperPull(ctx, image.Ref)
 	}
+	return image.Ref, err
+}
 
-	var pullErr error
+// BeginHelperPull opens the image service's event suppression window for a
+// possible tools pull; the returned function closes it after the booking.
+func (s *VolumeService) BeginHelperPull(ref string) func() {
+	if s.imageService == nil {
+		return func() {}
+	}
+	return s.imageService.BeginHelperPull(ref)
+}
+
+// RecordHelperPull keeps the image service's pull bookkeeping for tools pulls.
+func (s *VolumeService) RecordHelperPull(ctx context.Context, ref string) {
 	if s.imageService != nil {
-		pullImageErr := s.imageService.PullImage(ctx, toolsImage, io.Discard, user.SystemUser, nil)
-		if pullImageErr == nil {
-			slog.InfoContext(ctx, "volume service: helper image strategy selected", "strategy", "tools-pulled", "image", toolsImage)
-			return toolsImage, nil
-		}
-		pullErr = pullImageErr
-		slog.WarnContext(ctx, "volume service: failed to pull configured tools helper image", "error", pullImageErr.Error())
-	} else {
-		return volumehelper.ResolveHelperImage(ctx, dockerClient, toolsImage)
+		s.imageService.RecordHelperPull(ctx, ref)
 	}
+}
 
-	return "", fmt.Errorf("failed to resolve helper image: configured tools image unavailable: %w", pullErr)
+// HelperPullOptions applies the stored registry credentials to tools image pulls.
+func (s *VolumeService) HelperPullOptions(ctx context.Context, ref string) (client.ImagePullOptions, error) {
+	if s.imageService == nil {
+		return client.ImagePullOptions{}, nil
+	}
+	return s.imageService.PullOptionsWithAuth(ctx, ref, nil)
 }
 
 func (s *VolumeService) acquireVolumeHelperInternal(ctx context.Context, volumeName string) (string, func(), error) {
