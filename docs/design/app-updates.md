@@ -3,7 +3,7 @@ Source: docklet-next/issues/439
 Revision: 910032a54830f5ce1d37070964fa2dc7efb8aa2f
 Retrieved: 2026-11-09
 License: Apache-2.0
-Deviations: Original narrow Compose self-update design summary.
+Deviations: Original narrow Compose self-update design summary; explicit recheck refresh.
 -->
 
 # Compose-faithful in-app updates
@@ -14,6 +14,16 @@ can update only to a version newer than themselves and no newer than the hub.
 Custom repositories, floating tags and non-Compose installs use manual updates.
 The stamped binary version and the current container's Config.Image identify the
 installation; RepoDigest ordering and OCI display labels do not determine policy.
+
+The hub keeps the release list for three hours; after a failed fetch it waits a
+minute before the next attempt and serves a list up to 24 hours old meanwhile.
+Each fetch is numbered at its start and only a later start may replace the
+stored list, so an older fetch never undoes a newer one; ordinary reads share one
+fetch, and a refresh never waits behind it. "Check again" first calls the hub-only `POST /system/releases/refresh`,
+which fetches the list once more (at most every 30 seconds), and then checks the
+host. Agents take their candidate
+from the same list, and the frozen agent check route stays unchanged. A failed
+refresh shows "check unavailable"; a successful one shows its time.
 
 The updating process persists a correlated operation in the existing KV store
 before creating its detached helper. A hub run is reserved before either a helper

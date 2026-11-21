@@ -5,6 +5,7 @@
 // Deviations: Original intake, problem-shape, capability and reload regression coverage.
 
 import { afterEach, expect, it, vi } from "vitest";
+import { CancelledError } from "@tanstack/react-query";
 import type { CodedActionRun } from "../message-code";
 import type { ResourceRef } from "../capability";
 import { createSelfUpdates } from "./self-update";
@@ -40,6 +41,12 @@ it("checks plain DTOs and refuses malformed checks and false intake acknowledgem
   const f = fixture(); const check = { version: "1.0.0", eligibility: { state: "not-eligible", code: "update.self-not-compose", manual: ["docker compose pull"] } };
   f.fetcher.mockResolvedValue(json(check)); expect(await f.api.getSelfUpdate("example")).toEqual(check);
   expect(String(f.fetcher.mock.calls[0]![0])).toBe("/api/environments/example/system/upgrade/check");
+  f.fetcher.mockClear(); f.fetcher.mockResolvedValueOnce(new Response(null, { status: 204 })).mockResolvedValueOnce(json(check));
+  expect(await f.api.getSelfUpdate("example", { refresh: true })).toEqual(check);
+  expect(f.fetcher.mock.calls.map(([url, init]) => `${(init as RequestInit | undefined)?.method} ${String(url)}`)).toEqual(["POST /api/system/releases/refresh", "GET /api/environments/example/system/upgrade/check"]);
+  f.fetcher.mockClear(); f.fetcher.mockResolvedValueOnce(json({ status: 503, detail: "update.check-unavailable" }, 503));
+  await expect(f.api.getSelfUpdate("example", { refresh: true })).rejects.toMatchObject({ outcome: { code: "update.check-unavailable" } });
+  expect(f.fetcher).toHaveBeenCalledTimes(1);
   f.fetcher.mockResolvedValue(json({ success: true, data: check })); await expect(f.api.getSelfUpdate("example")).rejects.toMatchObject({ outcome: { code: "update.check-unavailable" } });
   f.fetcher.mockResolvedValue(json({ ...accepted, accepted: false, code: "host.busy" }, 202)); await expect(f.api.selfUpdate("example", { targetVersion: "1.0.1" })).rejects.toMatchObject({ outcome: { code: "host.busy" } });
 });
@@ -92,6 +99,17 @@ it("uses the actual HTTP activity decoder for accepted updates and publishes the
   const off = adapter.subscribeActions(rows => { observed = rows; }); off();
   expect(observed.some(row => row.id === "update-run" && row.status === "succeeded" && row.sourceOperation === "agent.update")).toBe(true);
   expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("/upgrade"))).toHaveLength(1);
+});
+it("an identity change during the release refresh aborts it and starts no check", async () => {
+  const f = fixture(); let answer!: (value: Response) => void; let signal: AbortSignal | undefined;
+  f.fetcher.mockImplementationOnce((_url, init) => { signal = init?.signal ?? undefined; return new Promise<Response>(resolve => { answer = resolve; }); });
+  const check = f.api.getSelfUpdate("example", { refresh: true });
+  await vi.advanceTimersByTimeAsync(0);
+  f.identity();
+  expect(signal?.aborted).toBe(true);
+  answer(new Response(null, { status: 204 }));
+  await expect(check).rejects.toBeInstanceOf(CancelledError);
+  expect(f.fetcher).toHaveBeenCalledTimes(1);
 });
 it("late polls from a previous identity cannot remove the next identity's follow ownership", async () => {
   const f = fixture(); let release!: (value: CodedActionRun) => void;

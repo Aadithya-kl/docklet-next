@@ -2,7 +2,7 @@
 // Revision: b11b3e70e671dd3c862b966b1d279251842c7319
 // Retrieved: 2026-11-09
 // License: Apache-2.0
-// Deviations: Original Docklet Next release feed client and selectors.
+// Deviations: Original Docklet Next release feed client and selectors; sequence-ordered cache with throttled forced refresh for explicit rechecks.
 
 package version
 
@@ -19,9 +19,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
-
-	"github.com/samber/hot"
 
 	imageDTO "github.com/florianfinn/docklet-next/types/image"
 	productVersion "github.com/florianfinn/docklet-next/types/version"
@@ -36,6 +35,17 @@ const (
 	releaseFeedPageSize  = 100
 	releaseFeedPageBytes = 8 << 20
 	releaseFeedTTL       = 3 * time.Hour
+	// A list this old is still served while a refetch fails.
+	releaseFeedStale = 24 * time.Hour
+	// After a failed fetch, reads wait this long before the next attempt.
+	releaseFeedRetry = time.Minute
+	// Forced refreshes closer together reuse the previous result, which keeps
+	// repeated clicks within the unauthenticated GitHub API budget.
+	releaseFeedMinRefresh = 30 * time.Second
+	// Ordinary reads wait for their fetch; this bounds that wait.
+	releaseFeedFetchTimeout = 10 * time.Second
+	// The browser gives the refresh 12 seconds; it never waits for another fetch.
+	releaseFeedRefreshTimeout = 8 * time.Second
 )
 
 // Release is one published stable product release. Values are immutable once
@@ -69,7 +79,23 @@ type releaseFeed struct {
 	disabled bool
 	// lookup resolves http feed hosts per request; tests replace it.
 	lookup func(ctx context.Context, host string) ([]netip.Addr, error)
-	cache  *hot.HotCache[struct{}, []Release]
+
+	// mu guards the fields below and is never held during a fetch. Every fetch
+	// takes a sequence number at its start; only a later start may replace the
+	// stored list, so an older fetch that finishes last cannot undo a newer one.
+	mu        sync.Mutex
+	started   uint64
+	stored    uint64
+	list      []Release
+	listAt    time.Time // last stored successful fetch
+	failedAt  time.Time // last failed fetch
+	forcedAt  time.Time // last explicit refresh
+	forcedErr error
+	// loadMu lets ordinary reads share one fetch; refreshMu serialises explicit
+	// refreshes. Neither waits for the other, so a refresh never queues behind
+	// a slow ordinary fetch.
+	loadMu    sync.Mutex
+	refreshMu sync.Mutex
 }
 
 func newReleaseFeed(client *http.Client, disabled bool, raw string) *releaseFeed {
@@ -78,22 +104,39 @@ func newReleaseFeed(client *http.Client, disabled bool, raw string) *releaseFeed
 		raw = DefaultReleaseFeedURL
 	}
 	f.endpoint, f.invalid = parseReleaseFeedURL(raw)
-	loader := func(_ []struct{}) (map[struct{}][]Release, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), defaultRequestTimeout) //nolint:forbidigo // Cache revalidation runs independently of request cancellation.
-		defer cancel()
-		releases, err := f.fetch(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return map[struct{}][]Release{{}: releases}, nil
-	}
-	f.cache = hot.NewHotCache[struct{}, []Release](hot.LRU, 1).
-		WithTTL(releaseFeedTTL).
-		WithLoaders(loader).
-		WithRevalidation(24*time.Hour, loader).
-		WithRevalidationErrorPolicy(hot.KeepOnError).
-		Build()
 	return f
+}
+
+// load fetches the list and stores it unless a later-started fetch already
+// stored one. The fetch does not end with the request that triggered it.
+func (f *releaseFeed) load(ctx context.Context, timeout time.Duration) error {
+	f.mu.Lock()
+	f.started++
+	seq := f.started
+	f.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	releases, err := f.fetch(ctx)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err != nil {
+		f.failedAt = time.Now()
+		return errReleaseFeedUnavailable()
+	}
+	if seq > f.stored {
+		f.list, f.listAt, f.failedAt, f.stored = releases, time.Now(), time.Time{}, seq
+	}
+	return nil
+}
+
+// due reports whether an ordinary read should fetch: the list is past its TTL
+// and the last failure is older than the retry wait.
+func (f *releaseFeed) due() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fresh := !f.listAt.IsZero() && time.Since(f.listAt) < releaseFeedTTL
+	waiting := !f.failedAt.IsZero() && time.Since(f.failedAt) < releaseFeedRetry
+	return !fresh && !waiting
 }
 
 // parseReleaseFeedURL accepts https anywhere and http for hosts that are checked
@@ -169,18 +212,47 @@ func (f *releaseFeed) requestClientInternal() *http.Client {
 
 // releases returns a copy of the cached stable releases, newest first. An empty
 // list means no release is published (including a 404 feed).
-func (f *releaseFeed) releases(_ context.Context) ([]Release, error) {
+func (f *releaseFeed) releases(ctx context.Context) ([]Release, error) {
 	if f == nil || f.disabled {
 		return nil, errReleaseFeedDisabled()
 	}
 	if f.invalid != nil {
 		return nil, errReleaseFeedUnavailable()
 	}
-	cached, found, err := f.cache.Get(struct{}{})
-	if err != nil || !found {
+	if f.due() {
+		f.loadMu.Lock()
+		if f.due() {
+			_ = f.load(ctx, releaseFeedFetchTimeout)
+		}
+		f.loadMu.Unlock()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listAt.IsZero() || time.Since(f.listAt) >= releaseFeedStale {
 		return nil, errReleaseFeedUnavailable()
 	}
-	return slices.Clone(cached), nil
+	return slices.Clone(f.list), nil
+}
+
+// refresh fetches the list again for an explicit recheck. A disabled or invalid
+// feed is left to releases, which reports it on the following read.
+func (f *releaseFeed) refresh(ctx context.Context) error {
+	if f == nil || f.disabled || f.invalid != nil {
+		return nil
+	}
+	f.refreshMu.Lock()
+	defer f.refreshMu.Unlock()
+	f.mu.Lock()
+	recent, last := !f.forcedAt.IsZero() && time.Since(f.forcedAt) < releaseFeedMinRefresh, f.forcedErr
+	f.mu.Unlock()
+	if recent {
+		return last
+	}
+	err := f.load(ctx, releaseFeedRefreshTimeout)
+	f.mu.Lock()
+	f.forcedAt, f.forcedErr = time.Now(), err
+	f.mu.Unlock()
+	return err
 }
 
 type feedEntryInternal struct {
@@ -272,6 +344,11 @@ func releaseFromEntryInternal(entry feedEntryInternal) (Release, bool) {
 		link = u.String()
 	}
 	return Release{Version: parsed.String(), Tag: entry.Tag, URL: link, Notes: entry.Body, PublishedAt: entry.PublishedAt, parsed: parsed}, true
+}
+
+// RefreshReleases fetches the release list again for an explicit recheck.
+func (s *VersionService) RefreshReleases(ctx context.Context) error {
+	return s.feed.refresh(ctx)
 }
 
 // NewestRelease returns the newest published stable release; ok is false when

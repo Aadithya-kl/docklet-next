@@ -2,7 +2,7 @@
 // Revision: 095cb778daba1034e2a39961199e712a75d4ba29
 // Retrieved: 2026-10-13
 // License: BSD-3-Clause
-// Deviations: Local module namespace; frozen Compose self-update recovery contract and hub-owned dispatch
+// Deviations: Local module namespace; frozen Compose self-update recovery contract and hub-owned dispatch; hub-only release list refresh for explicit rechecks
 
 package upgrade
 
@@ -46,6 +46,15 @@ func (h *Handler) CheckUpgradeAvailable(ctx context.Context, input *CheckUpgrade
 		return nil, wireError(err)
 	}
 	return &CheckUpgradeOutput{Body: out}, nil
+}
+
+// RefreshReleases fetches the hub's release list again for an explicit recheck.
+// Agents take their candidate from the same list, so one refresh serves every host.
+func (h *Handler) RefreshReleases(ctx context.Context, _ *struct{}) (*struct{}, error) {
+	if h.service == nil || h.service.versions == nil || h.service.versions.RefreshReleases(ctx) != nil {
+		return nil, huma.Error503ServiceUnavailable("update.check-unavailable")
+	}
+	return &struct{}{}, nil
 }
 func (h *Handler) TriggerUpgrade(ctx context.Context, input *TriggerUpgradeInput) (*TriggerUpgradeOutput, error) {
 	user, err := handlerutil.RequireUser(ctx)

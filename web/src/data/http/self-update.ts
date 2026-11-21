@@ -2,7 +2,7 @@
 // Revision: 48f47c93878ecf1c27491d0214db80d5b38b547d
 // Retrieved: 2026-11-09
 // License: Apache-2.0
-// Deviations: Original self-update intake and identity-owned activity/version following.
+// Deviations: Original self-update intake and identity-owned activity/version following; explicit recheck refreshes the release list.
 
 import { CancelledError } from "@tanstack/react-query";
 import type { HubUpdateSession } from "./hub-update-session";
@@ -63,6 +63,18 @@ export function createSelfUpdates({ baseUrl, client, capability, generation, rea
       throw error;
     } finally { stopTimer(); controllers.delete(controller); parent?.removeEventListener("abort", abort); }
   }
+  // Hub-only: renews the release list every host's candidate comes from. Owned
+  // like every other request, so an identity change aborts it and drops the check.
+  async function refreshReleases() {
+    const owner = generation(), version = epoch, controller = new AbortController(); controllers.add(controller);
+    const stopTimer = pausableTimeout(12_000, () => controller.abort());
+    try {
+      const response = await client.fetch(`${baseUrl}/system/releases/refresh`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json" }, signal: controller.signal })
+        .catch(() => undefined);
+      if (owner !== generation() || version !== epoch) throw new CancelledError();
+      if (!response?.ok) throw runtimeError("update.check-unavailable", response?.status);
+    } finally { stopTimer(); controllers.delete(controller); }
+  }
   async function allowed(host: string) {
     const owner = generation(), version = epoch;
     if (!host || host.includes("~")) throw unavailable("selfUpdate", selfUpdateRef(host));
@@ -97,8 +109,9 @@ export function createSelfUpdates({ baseUrl, client, capability, generation, rea
     timers.set(id, setTimeout(() => { void poll(); }, delay));
   }
   return {
-    async getSelfUpdate(host: string): Promise<SelfUpdateCheck> {
+    async getSelfUpdate(host: string, options?: { refresh?: boolean }): Promise<SelfUpdateCheck> {
       await allowed(host);
+      if (options?.refresh) await refreshReleases();
       const value = await request(`/environments/${encodeURIComponent(host)}/system/upgrade/check`) as SelfUpdateCheck;
       if (!validSelfUpdateCheck(value)) throw runtimeError("update.check-unavailable");
       // Recover following after navigation or a browser refresh from the durable operation.
