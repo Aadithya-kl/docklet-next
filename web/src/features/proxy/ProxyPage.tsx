@@ -2,7 +2,7 @@
 // Revision: 02c2a7139b3e0b1f3ec2790f403710de35ef051c
 // Retrieved: 2026-11-16
 // License: Apache-2.0
-// Deviations: Original production proxy Manager implementation.
+// Deviations: Original production proxy Manager implementation. M34 #549: lab instance bar card that stacks on phones.
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslations } from "use-intl";
@@ -11,6 +11,9 @@ import { usePrincipal } from "@/data/use-principal";
 import { useHosts } from "@/data/queries";
 import { identityLifetime } from "@/data/identity-lifetime";
 import { createProxyApi } from "@/data/http/proxy-api";
+import { Server } from "lucide-react";
+import { PageHeader } from "@/shared/components/page";
+import { IconTile, ToneBadge } from "@/shared/components/tone";
 import { Button } from "@/shared/ui/button";
 import { Choice, ErrorView } from "./controls";
 import { InstanceWorkspace } from "./InstanceWorkspace";
@@ -25,7 +28,8 @@ const to = (next: View) => (old: { last: string }) => ({ view: next, last: next.
 const first = (rows: Instance[]): View => (rows[0] ? { kind: "instance", id: rows[0].id } : { kind: "setup" });
 
 function Manager() {
-  const t = useTranslations("proxyContract.ui"),
+  const contract = useTranslations("proxyContract"),
+    t = useTranslations("proxyContract.ui"),
     hosts = useHosts();
   const adapter = useAdapter(),
     lifetime = identityLifetime(adapter);
@@ -93,20 +97,27 @@ function Manager() {
     }
   };
   return (
-    <div className="[&_button]:max-w-full [&_button]:whitespace-normal mx-auto grid w-full min-w-0 max-w-6xl gap-6 p-4 sm:p-6">
-      <header>
-        <h1 className="text-2xl font-semibold">{t("title")}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{t("intro")}</p>
-      </header>
+    <div className="[&_button]:max-w-full [&_button]:whitespace-normal grid min-w-0 gap-5">
+      <PageHeader title={t("title")} description={t("intro")} />
       {error !== undefined && <ErrorView error={error} />}
       {hosts.isError && <ErrorView error={hosts.error} />}
       {instances && (
         <>
           {instances.length > 0 && (
-            <div className="grid min-w-0 gap-3 rounded-xl border bg-card p-4 sm:grid-cols-[1fr_auto]">
-              <Choice
+            <div className="flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-3 md:flex-row md:items-center">
+              {/* Phones stack the identity, picker and action instead of overlapping them. */}
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                <IconTile tone="accent"><Server /></IconTile>
+                {instance ? <div className="min-w-0">
+                  <p className="text-xs text-muted-foreground">{t("activeProxy")}</p>
+                  <p className="font-semibold [overflow-wrap:anywhere]">{instance.name} · {contract(`kinds.${instance.kind}`)}</p>
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2"><span className="font-mono text-xs [overflow-wrap:anywhere]">{instance.identity.containerName}</span><ToneBadge tone="cyan">{hosts.data?.find(h => h.id === instance.environmentId)?.name ?? instance.environmentId}</ToneBadge></div>
+                </div> : <p className="text-sm text-muted-foreground">{t("instance")}</p>}
+              </div>
+              <div className="w-full min-w-0 md:w-72"><Choice
                 id="proxy-instance"
                 label={t("instances")}
+                hideLabel
                 value={instance ? instance.id : SETUP}
                 placeholder={t("instance")}
                 onChange={v => setPage(to(v === SETUP ? { kind: "setup" } : { kind: "instance", id: v }))}
@@ -118,24 +129,14 @@ function Manager() {
                   { value: SETUP, label: t("newInstanceOption") },
                 ]}
               />
-              <Button variant="outline" className="self-end" disabled={!instance} onClick={() => setPage(to({ kind: "setup" }))}>
+              </div>
+              <Button variant="outline" className="self-start md:self-center" disabled={!instance} onClick={() => setPage(to({ kind: "setup" }))}>
                 {t("newInstance")}
               </Button>
             </div>
           )}
           {instance ? (
             <>
-              <div className="flex min-w-0 flex-wrap gap-x-5 gap-y-2 text-sm">
-                <span className="break-all">
-                  {t("instance")} · {instance.name}
-                </span>
-                <span className="break-all">
-                  {t("host")} · {hosts.data?.find(h => h.id === instance.environmentId)?.name ?? instance.environmentId}
-                </span>
-                <span className="break-all">
-                  {t("container")} · {instance.identity.containerName}
-                </span>
-              </div>
               <InstanceWorkspace
                 key={JSON.stringify(instance)}
                 instance={instance}

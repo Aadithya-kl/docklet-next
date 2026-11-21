@@ -2,7 +2,7 @@
 // Revision: 02c2a7139b3e0b1f3ec2790f403710de35ef051c
 // Retrieved: 2026-11-16
 // License: Apache-2.0
-// Deviations: Original production proxy Manager implementation.
+// Deviations: Original production proxy Manager implementation. M34 #549: eligibility badge with Refresh in one row; no duplicate Routes heading.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "use-intl";
@@ -14,6 +14,7 @@ import { Operations } from "./Operations";
 import { RouteEditor } from "./RouteEditor";
 import { ChangeDialog, type ChangeAction } from "./ChangeDialog";
 import { RouteList } from "./RouteList";
+import { ManualImportHint } from "./ManualImportHint";
 import { Settings } from "./Settings";
 import { canInsertImport, drifted, operationRequest, relativeTarget, routeWritesAllowed } from "./model";
 import type { Acknowledgements, Change, Instance, Inventory, Operation, ReadResult, Route } from "./types";
@@ -168,9 +169,11 @@ export function InstanceWorkspace({
   const writable = !!snapshot && routeWritesAllowed(snapshot.read, snapshot.inventory) && !blocked;
   return (
     <div className="grid min-w-0 gap-5">
-      <div className="flex flex-wrap gap-2">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">{snapshot && <EligibilityView value={snapshot.inventory.eligibility} />}</div>
         <Button
           variant="outline"
+          size="sm"
           disabled={busy}
           onClick={() => {
             setEditor(undefined);
@@ -193,7 +196,6 @@ export function InstanceWorkspace({
       {!snapshot && error !== undefined && settings(undefined)}
       {snapshot && (
         <>
-          <EligibilityView value={snapshot.inventory.eligibility} />
           {JSON.stringify(snapshot.read.eligibility) !== JSON.stringify(snapshot.inventory.eligibility) && (
             <EligibilityView value={snapshot.read.eligibility} />
           )}
@@ -207,6 +209,7 @@ export function InstanceWorkspace({
               <pre className="whitespace-pre-wrap break-all font-mono text-xs">{snapshot.inventory.importLine}</pre>
               {canInsertImport(snapshot.inventory) ? (
                 <Button
+                  className="justify-self-start"
                   disabled={blocked}
                   onClick={() =>
                     setAction({
@@ -221,27 +224,23 @@ export function InstanceWorkspace({
                   {t("insertImport")}
                 </Button>
               ) : (
-                <p className="text-sm">{t("manualImport")}</p>
+                <ManualImportHint instance={instance} />
               )}
             </div>
           )}
           <Tabs defaultValue="routes" className="min-w-0">
-            <TabsList>
+            <TabsList variant="line" className="max-w-full justify-start border-b">
               <TabsTrigger value="routes">{t("routes")}</TabsTrigger>
               <TabsTrigger value="settings">{t("settings")}</TabsTrigger>
             </TabsList>
             <TabsContent value="routes" className="grid min-w-0 gap-4 pt-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-lg font-semibold">{t("routes")}</h2>
-                <Button disabled={!writable} onClick={() => setEditor({ snapshot })}>
-                  {t("newRoute")}
-                </Button>
-              </div>
               <RouteList
+                entryPoints={snapshot.inventory.entryPoints}
                 instance={{ ...instance, identity: snapshot.inventory.identity }}
                 routes={snapshot.read.routes ?? []}
                 hashes={Object.fromEntries((snapshot.read.files ?? []).map(file => [file.path, file.hash]))}
                 writable={writable}
+                create={() => setEditor({ snapshot })}
                 edit={route => setEditor({ route, snapshot })}
                 action={value => setAction({ value, snapshot })}
               />

@@ -2,7 +2,7 @@
 // Revision: 095cb778daba1034e2a39961199e712a75d4ba29
 // Retrieved: 2026-10-13
 // License: BSD-3-Clause
-// Deviations: Local module namespace; functional cut: removed central variables and .env.global; functional cut: removed GitOps and saved Git repositories; nested COMPOSE_FILE base classified (#406).
+// Deviations: Local module namespace; functional cut: removed central variables and .env.global; functional cut: removed GitOps and saved Git repositories; nested COMPOSE_FILE base classified (#406). M34 #547: classified load problems instead of raw load errors. M34 #548: recorded Compose environment inputs.
 
 package projects
 
@@ -62,12 +62,13 @@ type ProjectEnvState struct {
 }
 
 type EnvLoader struct {
-	workdir       string
-	autoInjectEnv bool
+	projectsDirectory string
+	workdir           string
+	autoInjectEnv     bool
 }
 
-func NewEnvLoader(_ string, workdir string, autoInjectEnv bool) *EnvLoader {
-	return &EnvLoader{workdir: workdir, autoInjectEnv: autoInjectEnv}
+func NewEnvLoader(projectsDirectory string, workdir string, autoInjectEnv bool) *EnvLoader {
+	return &EnvLoader{projectsDirectory: projectsDirectory, workdir: workdir, autoInjectEnv: autoInjectEnv}
 }
 
 // processEnvAllowlist is the only part of Arcane's own process environment
@@ -89,12 +90,7 @@ func allowedProcessEnvInternal() EnvMap {
 	return envMap
 }
 
-// LoadEnvironment loads and merges environment variables from all sources:
-// 1. Allowlisted process environment (TZ)
-// 2. Project-specific .env file (from workdir)
-// The rest of the Arcane process environment is intentionally excluded so its
-// own variables never leak into compose interpolation of managed projects.
-func (l *EnvLoader) LoadEnvironment(ctx context.Context) (envMap, injectionVars EnvMap, err error) {
+func (l *EnvLoader) loadConventionalEnvironment(ctx context.Context) (envMap, injectionVars EnvMap, err error) {
 	envMap = allowedProcessEnvInternal()
 	injectionVars = make(EnvMap)
 
@@ -195,7 +191,7 @@ func ParseProjectEnvContent(content string, contextEnv EnvMap) (EnvMap, error) {
 
 	envMap, err := dotenv.ParseWithLookup(strings.NewReader(content), lookupFn)
 	if err != nil {
-		return nil, fmt.Errorf("parse env: %w", err)
+		return nil, fmt.Errorf("parse env: %w", errMalformedEnv)
 	}
 
 	return envMap, nil
@@ -203,7 +199,7 @@ func ParseProjectEnvContent(content string, contextEnv EnvMap) (EnvMap, error) {
 
 // WithTransientValidationEnvFile temporarily writes a project .env file while
 // running compose validation, then restores the original file state.
-func WithTransientValidationEnvFile(ctx context.Context, projectPath string, effectiveEnvContent *string, run func() error) (err error) {
+func withConventionalTransientValidationEnvFile(ctx context.Context, projectPath string, effectiveEnvContent *string, run func() error) (err error) {
 	// Read through os rather than the root-confined API: a project .env is
 	// allowed to be a symlink whose target lives outside the project directory,
 	// and that write-through is deliberately preserved (#3556).
@@ -261,7 +257,7 @@ func WithTransientValidationEnvFile(ctx context.Context, projectPath string, eff
 
 // CheckProjectEnvAccess reports a configuration error when the runtime user
 // lacks permission to open dir's .env or traverse its path.
-func CheckProjectEnvAccess(ctx context.Context, projectsDir, dir string) *projecttypes.ConfigurationError {
+func checkConventionalProjectEnvAccess(ctx context.Context, projectsDir, dir string) *projecttypes.ConfigurationError {
 	envPath := filepath.Join(dir, EffectiveEnvFileName)
 	file, err := os.Open(envPath)
 	if err == nil {
@@ -392,7 +388,7 @@ func ParseComposeEnvOptions(workdir string, env EnvMap) (ComposeEnvOptions, erro
 		if n, convErr := strconv.Atoi(raw); convErr == nil && n > 0 {
 			opts.ParallelLimit = n
 		} else {
-			slog.DebugContext(context.Background(), "ignoring invalid COMPOSE_PARALLEL_LIMIT", "value", raw) //nolint:forbidigo // Compose environment parsing is a pure helper without a request context.
+			slog.DebugContext(context.Background(), "ignoring invalid COMPOSE_PARALLEL_LIMIT") //nolint:forbidigo // Compose environment parsing is a pure helper without a request context.
 		}
 	}
 
@@ -494,18 +490,18 @@ func mergeComposeEnvFilesInternal(ctx context.Context, workdir string, envMap En
 	for _, entry := range ComposeEnvFileEntriesFromEnv(envMap) {
 		resolved, err := ResolvePathWithinDir(workdir, entry)
 		if err != nil {
-			slog.WarnContext(ctx, "skipping COMPOSE_ENV_FILES entry outside project directory", "entry", entry, "error", err)
+			slog.WarnContext(ctx, "skipping COMPOSE_ENV_FILES entry outside project directory", "entry", entry)
 			continue
 		}
 		// os.Stat rather than acfs: env files may be symlinks resolving outside
 		// any confinement root (a supported setup).
 		if _, statErr := os.Stat(resolved); statErr != nil {
-			slog.WarnContext(ctx, "COMPOSE_ENV_FILES entry not found", "path", resolved, "error", statErr)
+			slog.WarnContext(ctx, "COMPOSE_ENV_FILES entry not found", "path", resolved)
 			continue
 		}
 		values, err := parse(resolved, envMap)
 		if err != nil {
-			slog.WarnContext(ctx, "failed to load COMPOSE_ENV_FILES entry", "path", resolved, "error", err)
+			slog.WarnContext(ctx, "failed to load COMPOSE_ENV_FILES entry", "path", resolved, "problem", ClassifyLoadError(err).String())
 			continue
 		}
 		if len(values) == 0 {
@@ -526,7 +522,7 @@ func parseComposeBoolInternal(env EnvMap, key string) bool {
 	v, err := strconv.ParseBool(raw)
 	if err != nil {
 		slog.DebugContext(context.Background(), "ignoring invalid compose boolean env var", //nolint:forbidigo // Compose environment parsing is a pure helper without a request context.
-			"key", key, "value", raw)
+			"key", key)
 		return false
 	}
 	return v

@@ -2,7 +2,7 @@
 // Revision: 095cb778daba1034e2a39961199e712a75d4ba29
 // Retrieved: 2026-10-13
 // License: BSD-3-Clause
-// Deviations: Local module namespace; functional cut: removed central variables and .env.global; functional cut: removed GitOps and saved Git repositories.
+// Deviations: Local module namespace; functional cut: removed central variables and .env.global; functional cut: removed GitOps and saved Git repositories. M34 #547: classified load problems instead of raw load errors. M34 #548: recorded Compose environment inputs.
 
 package projects
 
@@ -328,7 +328,7 @@ func ApplyLenientLoaderOptions(ctx context.Context, opts *loader.Options, compos
 					default:
 						// Variable is unset with no default (or a ${VAR:?msg}
 						// required variable, which lenient loading tolerates).
-						slog.DebugContext(ctx, "compose variable undefined during lenient load, using placeholder", "expression", substring, "composeFile", composeFile)
+						slog.DebugContext(ctx, "compose variable undefined during lenient load, using placeholder", "variable", lenientVariableName(substring), "composeFile", composeFile)
 						return lenientUndefinedPlaceholder, nil
 					}
 				}),
@@ -364,10 +364,18 @@ func LoadComposeProject(
 	services []string,
 	prepare PrepareProjectFunc,
 ) (project *composetypes.Project, err error) {
+	// Load errors can quote env values or ${VAR:?message} text; every caller
+	// sees only the classified problem while errors.Is/As still reach the cause.
+	defer func() { err = SafeError(err) }()
 	defer recoverComposeLoadPanicInternal(ctx, composeFile, &project, &err)
 
 	workdir := filepath.Dir(composeFile)
 
+	input, err := ResolveComposeInputs(ctx, projectsDirectory, workdir, autoInjectEnv)
+	if err != nil {
+		return nil, err
+	}
+	ctx = WithResolvedInputs(ctx, input)
 	envLoader := NewEnvLoader(projectsDirectory, workdir, autoInjectEnv)
 
 	// Load the allowlisted process environment and current project env for injection.
@@ -449,6 +457,11 @@ func LoadComposeProject(
 		if lenient {
 			ApplyLenientLoaderOptions(ctx, opts, composeFile)
 		}
+		if opts.Interpolate != nil && !opts.SkipInterpolation && !lenient {
+			opts.Interpolate.Substitute = func(value string, mapping template.Mapping) (string, error) {
+				return template.SubstituteWithOptions(value, mapping, template.WithoutLogging)
+			}
+		}
 		if configureLoader != nil {
 			configureLoader(opts)
 		}
@@ -467,6 +480,10 @@ func LoadComposeProject(
 		project.ComposeFiles = append(project.ComposeFiles, configFile.Filename)
 	}
 
+	if err := input.confirm(project); err != nil {
+		return nil, err
+	}
+
 	var rawSources map[string]string
 	if !isNilVolumeSourcePathMapperInternal(pathMapper) {
 		rawSources = harvestRawSourcesInternal(ctx, cfg, loaderOptions...)
@@ -477,7 +494,11 @@ func LoadComposeProject(
 		return nil, err
 	}
 
-	injectServiceConfigurationInternal(project, injectionVars)
+	var recordedPaths []string
+	if input.Recorded() {
+		recordedPaths = input.Paths
+	}
+	injectServiceConfigurationInternal(project, injectionVars, recordedPaths)
 	return project, nil
 }
 
@@ -528,7 +549,7 @@ func finishLoadedProjectInternal(ctx context.Context,
 func harvestRawSourcesInternal(ctx context.Context, cfg composetypes.ConfigDetails, loaderOptions ...func(*loader.Options)) (rawSources map[string]string) {
 	defer func() {
 		if panicErr := utils.PanicToError(recover()); panicErr != nil {
-			slog.DebugContext(ctx, "panic while harvesting raw compose paths", "error", panicErr)
+			slog.DebugContext(ctx, "panic while harvesting raw compose paths")
 			rawSources = nil
 		}
 	}()
@@ -542,7 +563,7 @@ func harvestRawSourcesInternal(ctx context.Context, cfg composetypes.ConfigDetai
 
 	project, err := loader.LoadWithContext(ctx, cfg, options...)
 	if err != nil {
-		slog.DebugContext(ctx, "unable to harvest raw compose paths; relative paths outside the projects mount may resolve incorrectly", "error", err)
+		slog.DebugContext(ctx, "unable to harvest raw compose paths; relative paths outside the projects mount may resolve incorrectly", "problem", ClassifyLoadError(err).String())
 		return nil
 	}
 
@@ -591,15 +612,14 @@ func recoverComposeLoadPanicInternal(ctx context.Context,
 		slog.WarnContext(ctx,
 			"panic while loading compose project; compose file may contain invalid syntax",
 			"path", source,
-			"error", panicErr,
 		)
-		*err = fmt.Errorf("load compose project panic for %s: %w", source, panicErr)
+		*err = fmt.Errorf("load compose project panic for %s", source)
 		*project = nil
 	}
 }
 
-func applyCustomLabelsInternal(projectName, serviceName, workingDirectory string, composeFiles []string) composetypes.Labels {
-	return composetypes.Labels{
+func applyCustomLabelsInternal(projectName, serviceName, workingDirectory string, composeFiles []string, recorded ...[]string) composetypes.Labels {
+	labels := composetypes.Labels{
 		api.ProjectLabel:     projectName,
 		api.ServiceLabel:     serviceName,
 		api.VersionLabel:     api.ComposeVersion,
@@ -607,11 +627,15 @@ func applyCustomLabelsInternal(projectName, serviceName, workingDirectory string
 		api.WorkingDirLabel:  workingDirectory,
 		api.ConfigFilesLabel: strings.Join(composeFiles, ","),
 	}
+	if len(recorded) > 0 && len(recorded[0]) > 0 {
+		labels[EnvironmentFileLabel] = strings.Join(recorded[0], ",")
+	}
+	return labels
 }
 
-func injectServiceConfigurationInternal(project *composetypes.Project, injectionVars EnvMap) {
+func injectServiceConfigurationInternal(project *composetypes.Project, injectionVars EnvMap, recorded ...[]string) {
 	for i, s := range project.Services {
-		s.CustomLabels = applyCustomLabelsInternal(project.Name, s.Name, project.WorkingDir, project.ComposeFiles)
+		s.CustomLabels = applyCustomLabelsInternal(project.Name, s.Name, project.WorkingDir, project.ComposeFiles, recorded...)
 
 		// Initialize environment if nil
 		if s.Environment == nil {
@@ -629,6 +653,11 @@ func injectServiceConfigurationInternal(project *composetypes.Project, injection
 }
 
 func LoadComposeProjectFromDir(ctx context.Context, dir, projectName, projectsDirectory string, autoInjectEnv bool, pathMapper *PathMapper) (*composetypes.Project, string, error) {
+	input, err := ResolveComposeInputs(ctx, projectsDirectory, dir, autoInjectEnv)
+	if err != nil {
+		return nil, "", err
+	}
+	ctx = WithResolvedInputs(ctx, input)
 	composeFile, err := DetectComposeFile(ctx, projectsDirectory, dir)
 	if err != nil {
 		return nil, "", err
@@ -710,12 +739,27 @@ func ValidateComposeContentForUpdate(ctx context.Context,
 	overrideFileName string,
 	lenient bool,
 ) (err error) {
+	// Editor errors stay detailed for the stack's own files; once recorded env
+	// files take part, only the classified problem may leave (values never in API).
+	recorded := false
+	defer func() {
+		if recorded {
+			err = SafeError(err)
+		}
+	}()
 	defer func() {
 		if panicErr := utils.PanicToError(recover()); panicErr != nil {
 			err = fmt.Errorf("compose file contains invalid syntax: %w", panicErr)
 		}
 	}()
 
+	input, inputErr := ResolveComposeInputs(ctx, projectsDirectory, projectPath, false)
+	recorded = input != nil && input.State != "none"
+	if inputErr == nil {
+		ctx = WithResolvedInputs(ctx, input)
+	} else if input != nil && input.State != "none" {
+		return inputErr
+	}
 	fullEnvMap, envErr := BuildValidationEnvironment(ctx, projectsDirectory, projectPath, effectiveEnvContent)
 	if envErr != nil {
 		return envErr
@@ -780,7 +824,7 @@ func ValidateComposeContentForUpdate(ctx context.Context,
 	defer missingIncludeLoader.Cleanup()
 
 	err = WithTransientValidationEnvFile(ctx, projectPath, effectiveEnvContent, func() error {
-		_, loadErr := loader.LoadWithContext(ctx, cfg, func(opts *loader.Options) {
+		validationModel, loadErr := loader.LoadWithContext(ctx, cfg, func(opts *loader.Options) {
 			opts.ResourceLoaders = append([]loader.ResourceLoader{missingIncludeLoader}, opts.ResourceLoaders...)
 			if validationProjectName != "" {
 				opts.SetProjectName(validationProjectName, false)
@@ -789,8 +833,16 @@ func ValidateComposeContentForUpdate(ctx context.Context,
 				ApplyLenientLoaderOptions(ctx, opts, cfg.ConfigFiles[0].Filename)
 			}
 		})
-		return loadErr
+		if loadErr != nil {
+			return loadErr
+		}
+		if input.Recorded() {
+			for _, file := range cfg.ConfigFiles {
+				validationModel.ComposeFiles = append(validationModel.ComposeFiles, file.Filename)
+			}
+			return input.confirm(validationModel)
+		}
+		return nil
 	})
-
 	return err
 }
