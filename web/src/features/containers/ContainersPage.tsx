@@ -8,7 +8,7 @@ import { useSearchParams } from "react-router";
 import { useTranslations } from "use-intl";
 
 import type { ContainerInfo } from "@/domain/model";
-import { containerRuntime, RUNTIME_TONE } from "@/domain/status";
+import { containerRuntime, isProblem, RUNTIME_TONE } from "@/domain/status";
 import { HiddenSection, type HiddenEntry } from "@/shared/components/hidden-items";
 import { HostChip } from "@/shared/components/host-chip";
 import { ToneBadge } from "@/shared/components/tone";
@@ -82,11 +82,13 @@ export default function ContainersPage() {
   );
   const hiddenTotal = containers.visible.filter((c) => hiddenIds.includes(c.id)).length;
 
+  // While a host in scope has not answered, totals wait and an empty list is not reported yet.
+  const totalsPending = containers.isPending || containers.hostsPending;
   const counts = useMemo(() => {
     const st = containers.visible.map((c) => containerRuntime(c, hosts.byId.get(c.hostId)));
     return {
       running: st.filter((s) => s === "running").length,
-      problems: st.filter((s) => s === "unhealthy" || s === "restarting").length,
+      problems: st.filter(isProblem).length,
       standalone: containers.visible.filter((c) => c.origin !== "compose").length,
     };
   }, [containers.visible, hosts.byId]);
@@ -162,18 +164,18 @@ export default function ContainersPage() {
 
   return (
     <>
-      <PageHeader title={t("title")} description={t("description", { scope })} />
+      <PageHeader compact title={t("title")} description={t("description", { scope })} />
       <InventoryNotice hosts={hosts.visible} items={containers.visible} />
-      <StatStrip
+      <StatStrip compact
         items={[
-          { label: t("strip.total"), value: containers.isPending ? "–" : containers.visible.length, icon: <Boxes /> },
-          { label: t("strip.running"), value: containers.isPending ? "–" : counts.running, icon: <Play />, tone: "ok" },
-          { label: t("strip.unhealthy"), value: containers.isPending ? "–" : counts.problems, icon: <AlertTriangle />, tone: counts.problems ? "err" : undefined },
-          { label: t("strip.standalone"), value: containers.isPending ? "–" : counts.standalone, icon: <Box /> },
+          { label: t("strip.total"), value: totalsPending ? "–" : containers.visible.length, icon: <Boxes /> },
+          { label: t("strip.running"), value: totalsPending ? "–" : counts.running, icon: <Play />, tone: "ok" },
+          { label: t("strip.unhealthy"), value: totalsPending ? "–" : counts.problems, icon: <AlertTriangle />, tone: counts.problems ? "err" : undefined },
+          { label: t("strip.standalone"), value: totalsPending ? "–" : counts.standalone, icon: <Box /> },
         ]}
       />
-      <Card className="gap-3 p-4">
-        <div className="flex flex-wrap items-center gap-2">
+      <Card className="gap-3 p-4 max-md:p-3">
+        <div data-list-toolbar className="flex flex-wrap items-center gap-2">
           <InputGroup className="w-full sm:w-72">
             <InputGroupAddon>
               <Search />
@@ -201,7 +203,7 @@ export default function ContainersPage() {
             }}
           />
         </div>
-        {containers.isPending ? (
+        {containers.isPending || (containers.hostsPending && rows.length === 0) ? (
           <OverviewSkeleton mode={mode} rows={9} />
         ) : containers.isError ? (
           <QueryError error={containers.error} onRetry={() => void containers.refetch()} />
@@ -260,7 +262,7 @@ export default function ContainersPage() {
             <HiddenSection kind="containers" entries={hiddenEntries(hidden, true)} />
           </>
         )}
-        {!containers.isPending && !containers.isError && <p className="px-1 text-xs text-muted-foreground">{t("footer", { shown: rows.length, total: containers.visible.length, hidden: hiddenTotal })}</p>}
+        {!totalsPending && !containers.isError && <p className="px-1 text-xs text-muted-foreground">{t("footer", { shown: rows.length, total: containers.visible.length, hidden: hiddenTotal })}</p>}
       </Card>
       <ContainerInspector container={current} host={current ? hosts.byId.get(current.hostId) : undefined} onClose={close} />
       <RecreateDialog container={editing ?? undefined} open={!!editing} onOpenChange={(o) => !o && setEditing(null)} />

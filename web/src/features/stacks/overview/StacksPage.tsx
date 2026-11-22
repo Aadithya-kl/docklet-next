@@ -44,6 +44,8 @@ export default function StacksPage() {
   const to = useTranslations("common.overview");
   const th = useTranslations("common.hidden");
   const stacks = useVisibleStacks();
+  // Totals wait until every host in scope answered; rows of answered hosts show meanwhile.
+  const totalsPending = stacks.isPending || stacks.hostsPending;
   const containers = useVisibleContainers();
   const hosts = useHostScope();
   const mode = usePreference("stacksMode");
@@ -153,7 +155,7 @@ export default function StacksPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader compact
         title={t("title")}
         description={t("description", { scope })}
         actions={
@@ -166,15 +168,15 @@ export default function StacksPage() {
         }
       />
       <InventoryNotice hosts={hosts.visible} items={stacks.visible} />
-      <StatStrip
+      <StatStrip compact
         items={[
-          { label: t("strip.stacks"), value: stacks.isPending ? "–" : stacks.visible.length, icon: <Layers /> },
-          { label: t("strip.running"), value: stacks.isPending ? "–" : counts.running, icon: <Play />, tone: counts.running ? "ok" : undefined },
-          { label: t("strip.problems"), value: stacks.isPending ? "–" : counts.problems, icon: <AlertTriangle />, tone: counts.problems ? "err" : undefined },
-          { label: t("strip.updates"), value: stacks.isPending ? "–" : counts.updates, icon: <Download />, tone: counts.updates ? "warn" : undefined, sub: t("strip.updatesSub") },
+          { label: t("strip.stacks"), value: totalsPending ? "–" : stacks.visible.length, icon: <Layers /> },
+          { label: t("strip.running"), value: totalsPending ? "–" : counts.running, icon: <Play />, tone: counts.running ? "ok" : undefined },
+          { label: t("strip.problems"), value: totalsPending ? "–" : counts.problems, icon: <AlertTriangle />, tone: counts.problems ? "err" : undefined },
+          { label: t("strip.updates"), value: totalsPending ? "–" : counts.updates, icon: <Download />, tone: counts.updates ? "warn" : undefined, sub: t("strip.updatesSub") },
         ]}
       />
-      <Card className="gap-3 p-4">
+      <Card className="gap-3 p-4 max-md:p-3">
         <StacksToolbar
           query={query}
           onQuery={setQuery}
@@ -189,7 +191,7 @@ export default function StacksPage() {
           layout={layout}
           onLayout={(l) => setPreference("stacksLayout", l)}
         />
-        {stacks.isPending ? (
+        {stacks.isPending || (stacks.hostsPending && rows.length === 0) ? (
           <OverviewSkeleton mode={mode} />
         ) : stacks.isError ? (
           <QueryError error={stacks.error} onRetry={() => void stacks.refetch()} />
@@ -264,7 +266,7 @@ export default function StacksPage() {
             <HiddenSection kind="stacks" entries={hiddenEntries(hidden, true)} />
           </>
         )}
-        {!stacks.isPending && !stacks.isError && (
+        {!totalsPending && !stacks.isError && (
           <p className="px-1 text-xs text-muted-foreground">{t("footer", { shown: rows.length, total: stacks.visible.length, hidden: hiddenTotal })}</p>
         )}
       </Card>

@@ -20,7 +20,7 @@ import { OverviewSkeleton } from "@/shared/components/overview-skeleton";
 import { OverviewTable, type TableView } from "@/shared/components/overview/overview-table";
 import { EmptyState, PageHeader, QueryError } from "@/shared/components/page";
 import { SegmentedToggle } from "@/shared/components/segmented-toggle";
-import { useHostScope } from "@/shared/hooks/use-host-scope";
+import { useHostScope, useHostsPending } from "@/shared/hooks/use-host-scope";
 import { nextSort, type SortDir } from "@/shared/lib/table-sort";
 import { setPreference, useHostSelection, usePreference } from "@/shared/preferences/preferences-store";
 import { Button } from "@/shared/ui/button";
@@ -91,7 +91,8 @@ export default function ImagesPage() {
   }, [visible]);
   const current = (images.data ?? []).find((i) => i.id === openId);
   const scope = hosts.filtered ? ts("scopeSome", { hosts: hosts.visible.map((h) => h.name).join(", ") }) : ts("scopeAll");
-  const pending = images.isPending;
+  // While a host in scope has not answered, totals wait and an empty list is not reported yet.
+  const hostsPending = useHostsPending(images.data), pending = images.isPending || hostsPending;
   const columns = (inBlock: boolean) => (view: TableView) => imageColumns((column) => t(`columns.${column}`), inBlock, view);
   const headProps = { sort, onSort, sortLabel: (column: string) => t("sortBy", { column }), selecting: false, actionsLabel: t("columns.actions"), dense: false };
   const filtersActive = !!query.trim() || usage !== "all";
@@ -104,7 +105,7 @@ export default function ImagesPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader compact
         title={t("title")}
         description={t("description", { scope })}
         actions={
@@ -121,7 +122,7 @@ export default function ImagesPage() {
         }
       />
       <InventoryNotice hosts={hosts.visible} items={visible} />
-      <StatStrip
+      <StatStrip compact
         className="md:grid-cols-5"
         items={[
           { label: t("strip.images"), value: pending ? "–" : visible.length, icon: <Package /> },
@@ -131,8 +132,8 @@ export default function ImagesPage() {
           { label: t("strip.updates"), value: pending ? "–" : stats.updates, icon: <Download />, tone: stats.updates ? "warn" : undefined },
         ]}
       />
-      <Card className="gap-3 p-4">
-        <div className="flex flex-wrap items-center gap-2">
+      <Card className="gap-3 p-4 max-md:p-3">
+        <div data-list-toolbar className="flex flex-wrap items-center gap-2">
           <InputGroup className="w-full sm:w-80">
             <InputGroupAddon>
               <Search />
@@ -143,7 +144,7 @@ export default function ImagesPage() {
           <span className="flex-1" />
           <OverviewViewControls layout={layout} onLayout={(l) => setPreference("imagesLayout", l)} labels={{ layout: ts("layout.label"), table: ts("layout.table"), hosts: ts("layout.hosts"), tableHint: ts("layout.tableHint"), hostsHint: ts("layout.hostsHint") }} />
         </div>
-        {pending ? (
+        {images.isPending || (hostsPending && rows.length === 0) ? (
           <OverviewSkeleton mode="compact" rows={8} />
         ) : images.isError ? (
           <QueryError error={images.error} onRetry={() => void images.refetch()} />

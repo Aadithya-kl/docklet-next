@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { catalogs } from "@/app/i18n/catalog";
 import { errorCode } from "@/data/api";
 import { createDemoAdapter } from "@/data/demo/demo-adapter";
 import { simulationStore } from "@/data/demo/simulation";
@@ -93,11 +94,14 @@ describe("volumes page actions", () => {
     const includeNamed = await within(dialog).findByRole("checkbox", { name: "Benannte Volumes einbeziehen" });
     expect(includeNamed.getAttribute("aria-checked")).toBe("false");
     await userEvent.click(includeNamed);
-    await within(dialog).findByText("2 von 2 Volumes ausgewählt · 1,5 GB");
+    // Named volumes added by the toggle start unselected (M35 #557); the user picks the one to delete.
+    await within(dialog).findByText(/^0 von 2 Volumes ausgewählt/);
+    // They are what the user asked to see, so they carry no "new" marker; that is kept for host changes.
+    expect(within(dialog).queryAllByText(new RegExp(catalogs.de.volumes.prune.new)).length).toBe(0);
     expect(within(dialog).getByText(/Nicht verbunden und deshalb nicht geprüft: Cedar/) !== null).toBe(true);
     expect(within(dialog).queryByText("wiki_uploads_old") === null).toBe(true);
 
-    await userEvent.click(within(dialog).getByRole("checkbox", { name: /paperless_export_tmp/ }));
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: /plex_old_config/ }));
     await userEvent.click(within(dialog).getByRole("button", { name: "1 Volume löschen" }));
     await within(dialog).findByRole("region", { name: "Entfernt" });
     await userEvent.click(within(dialog).getAllByRole("button", { name: "Schließen" }).find((button) => button.dataset.slot !== "dialog-close")!);
