@@ -2,7 +2,7 @@
 // Revision: 095cb778daba1034e2a39961199e712a75d4ba29
 // Retrieved: 2026-10-13
 // License: BSD-3-Clause
-// Deviations: Local module namespace; functional cut: removed GitOps and saved Git repositories.
+// Deviations: Local module namespace; functional cut: removed GitOps and saved Git repositories; observe deploy operation barriers.
 
 package projects
 
@@ -45,6 +45,9 @@ func NewCoordinator(commands projecttypes.ComposeCommands) projecttypes.ComposeC
 // Deploy loads, prepares images, then reconciles the project.
 func (c *composeCoordinatorInternal) Deploy(ctx context.Context, request projecttypes.ComposeDeployment) (_ *composetypes.Project, err error) {
 	defer func() {
+		if err != nil {
+			DeployReporterFromContext(ctx).PrepareFailed()
+		}
 		if err != nil && request.Recover != nil {
 			request.Recover(ctx)
 		}
@@ -67,9 +70,14 @@ func (c *composeCoordinatorInternal) Deploy(ctx context.Context, request project
 		pullPolicy = NormalizeDeployPullPolicy(request.DefaultPullPolicy)
 	}
 	pullPolicy = cmp.Or(pullPolicy, "missing")
+	if request.Options != nil && NormalizeDeployPullPolicy(request.Options.PullPolicy) == "never" {
+		forceLocalImages(request.ProjectID, model)
+	}
 	if prepareImagesForDeployErr := c.PrepareImagesForDeploy(ctx, request.ProjectID, model, request.Progress, operations, pullPolicy); prepareImagesForDeployErr != nil {
 		return nil, fmt.Errorf("failed to prepare project images for deploy: %w", prepareImagesForDeployErr)
 	}
+	DeployReporterFromContext(ctx).ConfigureProject(model)
+	DeployReporterFromContext(ctx).Phase("deploy")
 	if request.BeforeCreate != nil {
 		if err := request.BeforeCreate(ctx); err != nil {
 			return nil, err
@@ -89,6 +97,20 @@ func (c *composeCoordinatorInternal) Deploy(ctx context.Context, request project
 	}
 	slog.InfoContext(ctx, "compose up completed successfully", "projectId", request.ProjectID, "projectName", model.Name)
 	return model, nil
+}
+
+// forceLocalImages makes an explicit request policy "never" win over service pull_policy and build, as the restore
+// path does: every service runs its existing local image (build services their resolved image name).
+func forceLocalImages(projectID string, model *composetypes.Project) {
+	for name, svc := range model.Services {
+		if svc.Build != nil {
+			image, resolved, _ := EnsureServiceImage(projectID, model.Name, name, svc)
+			svc = resolved
+			svc.Image, svc.Build = image, nil
+		}
+		svc.PullPolicy = composetypes.PullPolicyNever
+		model.Services[name] = svc
+	}
 }
 
 // ResolveRemoveOrphans preserves explicit caller opt-in.
@@ -353,6 +375,7 @@ func (c *composeCoordinatorInternal) ensureDeployServiceImageReadyInternal(
 		return nil
 	}
 
+	DeployReporterFromContext(ctx).Phase("pull")
 	err = operations.Pull(ctx, imageName, progressWriter)
 	if err == nil {
 		return nil

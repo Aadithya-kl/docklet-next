@@ -2,8 +2,9 @@
 // Revision: dfdfa084478d327818d8c57b0973d638f80861f6
 // Retrieved: 2026-10-15
 // License: Apache-2.0
-// Deviations: Original activity and event DTO projection for issue 38; catalogued labels for hub job runs. M19: total contract-code catalogue maps. M24 S6: observed recovery and update UI follow-ups.
+// Deviations: Original activity and event DTO projection for issue 38; catalogued labels for hub job runs. M19: total contract-code catalogue maps. M24 S6: observed recovery and update UI follow-ups. Validated atomic deploy observations.
 
+import type { DeployProgress } from "@/features/activity/deploy-progress";
 import { runtimePeerAudit } from "./runtime-peer-audit";
 import { operationReasonKey } from "../operation-reason";
 import type { components } from "@/api/generated/schema";
@@ -29,6 +30,27 @@ type Event = components["schemas"]["EventEvent"];
 // generic action dialog, toasts and history show the same labels as the recreate view.
 const RECREATE_STEPS: Record<string, string> = { "Renaming container": "renaming", "Creating replacement": "creating", "Starting replacement": "starting", "Removing previous container": "removing", "Restoring previous container": "restoring" };
 const STEP_KEYS = new Set<DeployStepKey>(["validate", "pull", "build", "create", "stop", "start", "health", "scan", "collect", "save", "wait", "connect"]);
+// Backup repository check stages (backend volume backup repository_check.go) with catalogued labels.
+const REPOSITORY_CHECK_STEPS = new Set(["connect", "save", "init", "open", "check"]);
+const REPOSITORY_CHECK_ACTION = "check_volume_backup_repository";
+
+/**
+ * Only a successful, timestamped check of this run's own target on this run's host names a snapshot count.
+ * The producer records the receiving host's hub-assigned ID (settings hubHostId) or "0" before any target set
+ * arrived; the latter is valid only for the host-local target. Anything else stays unclaimed.
+ */
+function repositoryCheckResult(run: Activity): { snapshotCount: number } | undefined {
+  const metadata = run.metadata;
+  const check = metadata?.backupTargetCheck;
+  if (run.status !== "success" || !check || typeof check !== "object" || Array.isArray(check)) return undefined;
+  const value = check as Record<string, unknown>;
+  if (metadata?.backupTargetId !== run.resourceId || value.activityId !== run.id || value.ok !== true || (value.code !== undefined && value.code !== "")) return undefined;
+  if (value.hostId !== run.environmentId && !(value.hostId === "0" && run.resourceId === "local")) return undefined;
+  if (typeof value.at !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(value.at) || Number.isNaN(Date.parse(value.at))) return undefined;
+  const count = value.snapshotCount;
+  return typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? { snapshotCount: count } : undefined;
+}
+
 const STREAMS = new Set<OutputStream>(["cmd", "stdout", "stderr", "note"]);
 const KINDS: Record<string, ActionKind> = {
   image_pull: "pull", image_update_check: "check-updates", image_patch: "update",
@@ -183,6 +205,27 @@ function stepKey(name: string): DeployStepKey {
   return STEP_KEYS.has(key) ? key : "other";
 }
 
+// Progress is copied from the Activity owning status, never filled from another row.
+function deployProgress(run: Activity): DeployProgress | undefined {
+  if ((run.type !== "project_deploy" && run.type !== "project_redeploy") || run.status !== "running" || run.outcomeState === "unknown" || (run.step !== "pull" && run.step !== "deploy")) return undefined;
+  const object = (value: unknown): Record<string, unknown> | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  const integer = (value: unknown, max: number): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
+  const result: DeployProgress = { phase: run.step };
+  const pull = object(run.metadata?.deployPull);
+  if (pull?.v === 1 && integer(pull.images, 64) && integer(pull.layersDone, 512) && integer(pull.layersTotal, 512) && pull.layersDone <= pull.layersTotal) {
+    result.pull = { images: pull.images, layersDone: pull.layersDone, layersTotal: pull.layersTotal };
+    if (integer(pull.bytesDone, Number.MAX_SAFE_INTEGER) && integer(pull.bytesTotal, Number.MAX_SAFE_INTEGER) && pull.bytesDone <= pull.bytesTotal) {
+      result.pull.bytesDone = pull.bytesDone;
+      result.pull.bytesTotal = pull.bytesTotal;
+    }
+  }
+  const activity = object(run.metadata?.deployActivity);
+  if (activity?.v === 1 && (activity.label === "create" || activity.label === "stop" || activity.label === "start" || activity.label === "wait") && integer(activity.services, 512) && activity.services > 0) {
+    result.activity = { label: activity.label, services: activity.services };
+  }
+  return result;
+}
+
 export function mapActivityDetail(detail: Detail): CodedActionRun {
   if (!detail || !detail.activity) throw new Error("dto.invalid-detail");
   const run: Activity = detail.activity;
@@ -192,7 +235,8 @@ export function mapActivityDetail(detail: Detail): CodedActionRun {
       ((run.outcomeState !== "known" && run.outcomeState !== "unknown") || typeof run.cancelRequested !== "boolean")) throw new Error("dto.invalid-runtime-knowledge");
   const action = typeof run.metadata?.action === "string" ? run.metadata.action : "";
   const backup = /volume_backup/.test(action) || run.resourceType === "backup_target" || run.resourceType === "volume_backup_download";
-  const kind: ActionKind = backup ? action.startsWith("restore_") ? "volume-restore" : "backup" : KINDS[run.type] ?? jobKind(run) ?? "activity";
+  const repositoryCheck = action === REPOSITORY_CHECK_ACTION;
+  const kind: ActionKind = backup ? action.startsWith("restore_") ? "volume-restore" : repositoryCheck ? "repository-check" : "backup" : KINDS[run.type] ?? jobKind(run) ?? "activity";
   const job = run.type === "job_run";
   // The hub's fallback job summary is "<job name>: <scheduler state>"; a real outcome message stays.
   const jobSummary = (text: string | undefined, code = run.messageCode): MessageCode | undefined => {
@@ -205,6 +249,10 @@ export function mapActivityDetail(detail: Detail): CodedActionRun {
   const m10 = run.type === "project_update" || run.type === "project_restore" || !!lifecycle;
   if (m10) { date(run.startedAt); optionalDate(run.endedAt); }
   const coded = (code: string | undefined, source: string, field: "progress" | "error" = "progress"): MessageCode => {
+    if (field === "progress" && (run.type === "project_deploy" || run.type === "project_redeploy")) {
+      const phase = source === "Pull" ? "pull" : source === "Deploy" ? "deploy" : source === "Preliminary pull failed; continuing deployment" ? "pullWarning" : undefined;
+      if (phase) return { code: `activity.deployProgress.${phase}`, params: {} };
+    }
     if (backup) {
       const key = backupCodeKey(code) ?? backupCodeKey(source);
       if (key) return { code: key, params: {} };
@@ -240,6 +288,7 @@ export function mapActivityDetail(detail: Detail): CodedActionRun {
   });
   return Object.assign({
     id: run.id,
+    deployProgress: deployProgress(run),
     ...(lifecycle ? { baselineCode: reason(lifecycle.baselineCode), lifecycleCode: reason(lifecycle.code), effectVerified: lifecycle.verified, restorePointId: lifecycle.restorePointId, pointCode: reason(lifecycle.pointCode) } : {}),
     ...(updateRecovery ? { updateRecovery } : {}),
     ...(job && typeof run.metadata?.jobId === "string" && /^update-window:/.test(run.metadata.jobId) && typeof run.metadata?.runId === "string" ? { jobRef: { jobId: run.metadata.jobId, runId: run.metadata.runId } } : {}),
@@ -267,12 +316,15 @@ export function mapActivityDetail(detail: Detail): CodedActionRun {
       : undefined,
     steps: (detail.stepTrace ?? []).map((step) => ({
       key: stepKey(step.name), state: stepState(step.status),
-      label: Object.hasOwn(RECREATE_STEPS, step.name) ? { code: `containers.recreate.steps.${RECREATE_STEPS[step.name]}`, params: {}, sourceText: step.name }
+      label: (run.type === "project_deploy" || run.type === "project_redeploy") && (step.name === "pull" || step.name === "deploy") ? { code: `activity.deployProgress.${step.name}`, params: {} }
+        : Object.hasOwn(RECREATE_STEPS, step.name) ? { code: `containers.recreate.steps.${RECREATE_STEPS[step.name]}`, params: {}, sourceText: step.name }
+        : repositoryCheck && REPOSITORY_CHECK_STEPS.has(step.name) ? { code: `volumes.backups.repositoryCheck.steps.${step.name}`, params: {}, sourceText: step.name }
         : job && JOB_STEPS.has(step.name) ? { code: `activity.jobStep.${step.name}`, params: {} } : coded(step.code, step.name),
       startedAt: step.startedAt, finishedAt: step.endedAt,
     })),
     log: detail.messages?.length ? detail.messages.map((item) => runtimePeerAudit(item.code, item.payload) ?? jobSummary(item.message, item.code) ?? coded(item.code, item.message)) : run.latestMessage ? [jobSummary(run.latestMessage) ?? coded(run.messageCode, run.latestMessage)] : [],
     ...(peerAudit ? { peerAudit } : {}),
+    ...(repositoryCheck && repositoryCheckResult(run) ? { repositoryCheck: repositoryCheckResult(run) } : {}),
     output,
     outputTruncated: detail.outputTruncated,
   }, { summary: { stepsAvailable: true } });
