@@ -2,7 +2,7 @@
 // Revision: b4807f4912bc07f3e51abaf552a69f2223cabd27
 // Retrieved: 2026-11-22
 // License: Apache-2.0
-// Deviations: Original embedded Tailscale route contract for Edge hosts (hub-side DTOs only).
+// Deviations: Original embedded Tailscale route contract for Edge hosts (hub-side DTOs only). M37 T1: absent provider statuses stay off the wire under encoding/json/v2.
 
 // Package tailnet holds the hub-side wire vocabulary of the optional Tailscale route.
 package tailnet
@@ -10,6 +10,9 @@ package tailnet
 import "time"
 
 const (
+	CodeMintRefused             = "tailnet.mint-refused"
+	CodeTestCleanupFailed       = "tailnet.test-cleanup-failed"
+	CodeTestRunning             = "tailnet.test-running"
 	CodeCredentialRejected      = "tailnet.credential-rejected"
 	CodeCoordinationUnreachable = "tailnet.coordination-unreachable"
 	CodeNotConnected            = "tailnet.not-connected"
@@ -31,10 +34,10 @@ const (
 
 // Problem is a typed refusal of a tailnet operation.
 type Problem struct {
-	Code   string `json:"code" enum:"tailnet.credential-rejected,tailnet.coordination-unreachable,tailnet.not-connected,tailnet.key-mint-failed,tailnet.mtls-unsupported"`
+	Code   string `json:"code" enum:"tailnet.credential-rejected,tailnet.coordination-unreachable,tailnet.not-connected,tailnet.key-mint-failed,tailnet.provider-unavailable,tailnet.mtls-unsupported,tailnet.mint-refused,tailnet.test-cleanup-failed,tailnet.test-running"`
 	Status int    `json:"status"`
 	// ProviderStatus is the HTTP status the Tailscale API answered with, when one was received.
-	ProviderStatus int `json:"providerStatus,omitempty"`
+	ProviderStatus int `json:"providerStatus,omitzero"`
 }
 
 func (p *Problem) Error() string             { return p.Code }
@@ -52,7 +55,7 @@ type Provisioning struct {
 	State string `json:"state" enum:"not-configured,not-applicable,checking,ok,rejected,unavailable"`
 	Code  string `json:"code,omitempty" enum:"tailnet.credential-rejected,tailnet.provider-unavailable"`
 	// ProviderStatus is the last rejecting HTTP status from the Tailscale API.
-	ProviderStatus int `json:"providerStatus,omitempty"`
+	ProviderStatus int `json:"providerStatus,omitzero"`
 }
 
 // Status is the redacted hub tailnet status; it never carries keys or peer endpoints.
@@ -68,8 +71,9 @@ type Status struct {
 	// RouteAvailable reports whether onboarding may offer the tailnet route for new hosts.
 	RouteAvailable bool `json:"routeAvailable"`
 	// RouteCode explains why the route is unavailable.
-	RouteCode  string `json:"routeCode,omitempty" doc:"tailnet.* refusal code"`
-	Generation int64  `json:"generation"`
+	RouteCode          string `json:"routeCode,omitempty" doc:"tailnet.* refusal code"`
+	Generation         int64  `json:"generation"`
+	CredentialRevision string `json:"credentialRevision"`
 }
 
 // HostPeer is the hub's view of one tailnet-route host.
@@ -102,4 +106,19 @@ type SettingsUpdate struct {
 	ClientID     string `json:"clientId,omitempty" maxLength:"256"`
 	ClientSecret string `json:"clientSecret,omitempty" maxLength:"512"`
 	AuthKey      string `json:"authKey,omitempty" maxLength:"512"`
+}
+
+// TestResult records only the checks proved by this request, never credentials.
+type TestResult struct {
+	CredentialRevision string      `json:"credentialRevision"`
+	Stale              bool        `json:"stale"`
+	Checks             []TestCheck `json:"checks" nullable:"false"`
+}
+
+// TestCheck separates provider admission from hub membership and cleanup certainty.
+type TestCheck struct {
+	ID             string `json:"id" enum:"credential,agent-key,cleanup,hub-joined,hub-tag,hub-address"`
+	State          string `json:"state" enum:"pass,fail,skipped,unknown"`
+	Code           string `json:"code,omitempty" enum:"tailnet.credential-rejected,tailnet.provider-unavailable,tailnet.not-connected,tailnet.mint-refused,tailnet.test-cleanup-failed,tailnet.test-running"`
+	ProviderStatus int    `json:"providerStatus,omitzero"`
 }

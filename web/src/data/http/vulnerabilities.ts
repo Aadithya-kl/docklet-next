@@ -2,7 +2,7 @@
 // Revision: cf5aa27a8ca449d95c66dcd253f7a1a2e114f0f5
 // Retrieved: 2026-10-27
 // License: Apache-2.0
-// Deviations: Original live vulnerability UI and contract regressions for issue #262. M20 #360: web hardening step (#359 #24 #175 #177 #383 #421 #271). D4 #271: fair physical host reads and result-local recovery. C2 #271: recover transient stale-success host batches without discarding snapshot rows. M23 #389: security fan-out reads are skippable background reads.
+// Deviations: Original live vulnerability UI and contract regressions for issue #262. M20 #360: web hardening step (#359 #24 #175 #177 #383 #421 #271). D4 #271: fair physical host reads and result-local recovery. C2 #271: recover transient stale-success host batches without discarding snapshot rows. M23 #389: security fan-out reads are skippable background reads. M37 #584: truthful activity titles, host targets and scan counts.
 
 import { freshFrom } from "../refresh-owner";
 import { inventoryRecovery } from "../inventory-recovery";
@@ -16,7 +16,7 @@ import { imageReference } from "@/domain/images";
 import type { ActiveScannedImage, Finding, Host, InventoryObservation, ScannedImage, SecurityOverview } from "@/domain/model";
 import { ScanAdmissionError, type ScanAdmission } from "@/domain/security";
 import { splitInventoryId } from "./inventory-mapping";
-import { array, count, counts, finding, id, invalid, object, run, string, summaries } from "./vulnerability-decoders";
+import { array, choice, count, counts, finding, id, invalid, object, run, string, summaries } from "./vulnerability-decoders";
 import { createSecuritySettings, settingsValues } from "./security-settings";
 import { vulnerabilityTransport, VulnerabilityFailure } from "./vulnerability-transport";
 import type { CsrfClient } from "./csrf-client";
@@ -53,8 +53,29 @@ function activeImages(hostId: string, body: unknown): ActiveScannedImage[] {
 export async function readScanProgress(request: ReturnType<typeof vulnerabilityTransport>, host: string, activity: string, signal?: AbortSignal) {
   const r = run(object(await request(`/environments/${encodeURIComponent(host)}/vulnerabilities/runs/${encodeURIComponent(activity)}`, "GET", undefined, true, signal)).data);
   if (r.activityId !== activity || r.environmentId !== "0") invalid();
-  return r.targets ? Math.min(100, Math.round(100 * (r.scanned + r.failed + r.skipped) / r.targets)) : undefined;
+  const done = r.scanned + r.failed + r.skipped;
+  return { targets: r.targets, done, failed: r.failed };
 }
+/** Reads one stored candidate run; retention misses never borrow a newer run's counts. */
+export async function readCandidateRun(request: ReturnType<typeof vulnerabilityTransport>, host: string, activityId: string, signal?: AbortSignal) {
+  let body: unknown;
+  try { body = await request(`/environments/${encodeURIComponent(host)}/vulnerabilities/candidates/runs/${encodeURIComponent(activityId)}`, "GET", undefined, true, signal); }
+  catch (error) {
+    // Counts are optional (result only): a missing run, or a host that cannot answer this read. A 1.4.0 Direct agent has
+    // no such route (uncoded 404); the hub reports an Edge agent's refused command as a tunnel failure (502).
+    const status = error instanceof VulnerabilityFailure ? error.status : error instanceof AdapterOutcomeError && error.outcome.kind === "error" ? error.outcome.status : undefined;
+    if (error instanceof VulnerabilityFailure && error.code === "vulnerability.run-not-found") return undefined;
+    if (status !== undefined && status >= 400 && status !== 401 && status !== 403) return undefined;
+    throw error;
+  }
+  const r = object(object(body).data);
+  if (r.activityId !== activityId) invalid();
+  return { activityId: id(r.activityId), trigger: choice(r.trigger, ["manual", "automatic"]),
+    status: choice(r.status, ["running", "completed", "partial", "failed", "cancelled", "interrupted"]),
+    startedAt: string(r.startedAt, 64), completedAt: r.completedAt === undefined ? undefined : string(r.completedAt, 64),
+    targets: count(r.targets), scanned: count(r.scanned), cached: count(r.cached), failed: count(r.failed), deferred: count(r.deferred) };
+}
+
 export function createVulnerabilities(o: Options): Pick<DockletAdapter, "getSecurity" | "getActiveSecurity" | "runScan" | "setScanEnabled" | "getScanSettings" | "saveScanSettings" | "cancelScan"> {
   const request = vulnerabilityTransport(o.baseUrl, o.client, o.generation);
   const settings = createSecuritySettings(request, o.capability, o.changed);

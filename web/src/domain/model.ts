@@ -58,12 +58,21 @@ export interface InventoryObservation {
   reason?: "agent.unavailable" | "agent.invalid-token" | "agent.update-required" | "inventory.read-error" | "inventory.mapping-error";
 }
 
+/** Docker daemon facts of a host, plus the hub's own project directory for the local host. */
+export interface HostDetails {
+  os?: string;
+  dockerVersion?: string;
+  projectDir?: string;
+}
+
 export interface Host {
   networkRoute?: import("./tailnet").NetworkRoute;
   tailnet?: import("./tailnet").TailnetPeer;
   inventory?: InventoryObservation;
   /** Inventory and system metadata have not been read; numeric fields are empty sentinels. */
   detailsUnavailable?: boolean;
+  /** Non-secret registration and session identity; a change discards per-host detail reads. */
+  identity?: string;
   id: string;
   name: string;
   /** Any CSS colour; used for host bars, chips and topology zones. */
@@ -272,6 +281,10 @@ export interface ActionRun {
   kind: ActionKind;
   title: string;
   target: string;
+  /** Resolve the display target from the current host list, never a raw environment ID. */
+  hostScoped?: boolean;
+  /** The target only names the operation (a scheduler job), so it is not repeated next to the title. */
+  operationTarget?: boolean;
   hostId?: string;
   stackId?: string;
   containerId?: string;
@@ -285,6 +298,8 @@ export interface ActionRun {
   progress: number;
   /** Live vulnerability run counters; absent when the run read is unavailable. */
   scanProgress?: number;
+  scan?: { targets: number; done: number; failed: number };
+  candidateScan?: { targets: number; scanned: number; cached: number; deferred: number; failed: number };
   startedAt: string;
   finishedAt?: string;
   error?: string;
@@ -408,6 +423,9 @@ export interface ScheduledJob {
   code?: string;
   cadence: string;
 }
+
+/** Samples kept per host metric history; the dashboard chart always shows this many bars. */
+export const METRICS_HISTORY_SAMPLES = 60;
 
 export interface HostMetrics {
   diskUnavailable?: boolean;

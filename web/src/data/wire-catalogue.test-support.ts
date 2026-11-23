@@ -6,7 +6,7 @@
 
 import {PROXY_STATE_KEYS,PROXY_REASON_KEYS} from "./wire-catalogue-proxy";
 import { MODULE_CODE_KEYS } from "./wire-catalogue-modules";
-import { TAILNET_CODE_KEYS, TAILNET_CONNECTION_KEYS, TAILNET_PROVISIONING_KEYS, TAILNET_PEER_KEYS } from "./wire-catalogue-tailnet";
+import { TAILNET_CODE_KEYS, TAILNET_CONNECTION_KEYS, TAILNET_PROVISIONING_KEYS, TAILNET_PEER_KEYS, TAILNET_TEST_STATE_KEYS } from "./wire-catalogue-tailnet";
 import { RECOVERY_OUTCOME_KEYS } from "./wire-catalogue-update";
 import { ADVISORY_USAGE_CODE_KEYS, REQUEST_CODE_KEYS, IMAGE_ERROR_KEYS, CONTAINER_CODE_KEYS, HOST_CODE_KEYS, ACCESS_CODE_KEYS, NETWORK_CODE_KEYS, WIDGET_CODE_KEYS } from "./wire-catalogue-errors";
 import { BACKUP_CODE_KEYS, BACKUP_REASON_KEYS, VOLUME_COMMAND_KEYS } from "./wire-catalogue-backup";
@@ -20,7 +20,8 @@ export const GUARDED_WIRE_ENUMS = [
 {name:"PROXY_STATE_KEYS",keys:PROXY_STATE_KEYS,properties:["ProxyOperation.state"]},
 {name:"PROXY_REASON_KEYS",keys:PROXY_REASON_KEYS,properties:["ProxyProblem.code"]},
 
- { name: "TAILNET_CODE_KEYS", keys: TAILNET_CODE_KEYS, properties: ["TailnetProblem.code", "TailnetConnection.code", "TailnetProvisioning.code"] },
+ { name: "TAILNET_CODE_KEYS", keys: TAILNET_CODE_KEYS, properties: ["TailnetProblem.code", "TailnetConnection.code", "TailnetProvisioning.code", "TailnetTestCheck.code"] },
+  { name: "TAILNET_TEST_STATE_KEYS", keys: TAILNET_TEST_STATE_KEYS, properties: ["TailnetTestCheck.state"] },
   { name: "TAILNET_CONNECTION_KEYS", keys: TAILNET_CONNECTION_KEYS, properties: ["TailnetConnection.state"] },
   { name: "TAILNET_PROVISIONING_KEYS", keys: TAILNET_PROVISIONING_KEYS, properties: ["TailnetProvisioning.state"] },
   { name: "TAILNET_PEER_KEYS", keys: TAILNET_PEER_KEYS, properties: ["TailnetHostPeer.state"] },

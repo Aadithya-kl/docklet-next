@@ -11,12 +11,14 @@ import { inventoryReadBudget } from "./host-read-deadline";
 import { skipReason, skipsReads } from "./host-read-policy";
 import { inventoryId } from "./inventory-mapping";
 import { createImageMetadata } from "./image-metadata";
+import { createHostDetails } from "./host-details";
 import { createStackImport } from "./stack-import";
 import { createScheduleReader } from "./inventory-schedule";
 import { createInventoryOwner } from "./inventory-owner";
 import { freshFrom } from "../refresh-owner";
 import { vulnerabilityTransport } from "./vulnerability-transport";
-import { createVulnerabilities, readScanProgress } from "./vulnerabilities";
+import { createVulnerabilities } from "./vulnerabilities";
+import { readActivityScanCounts } from "@/features/activity/read-scan-counts";
 import { refFor } from "./operation-resource";
 import { createTailnet } from "./tailnet";
 import { createUpdateSettings } from "./update-settings";
@@ -490,13 +492,8 @@ export function createHttpAdapter(options: HttpAdapterOptions = {}): DockletAdap
           } catch (error) { if (isCancelledError(error)) throw error; }
           if (!["running", "queued"].includes(run.status)) backupChanged();
         }
-        if (run.kind === "scan" && dto.activity.resourceType === "environment") {
-          try {
-            const capability = await getCapability("getSecurity", { kind: "host", id: host });
-            if (!capability.available) throw unavailable("getSecurity", capability.resourceRef, capability.disabledReasonCode);
-            run.scanProgress = await readScanProgress(scanRequest, host, id, signal);
-          } catch (error) { if (isCancelledError(error)) throw error; }
-        }
+        await readActivityScanCounts(run, { request: scanRequest, host, id, signal, hostScan: dto.activity.resourceType === "environment", hosts: listHosts,
+          capability: () => getCapability("getSecurity", { kind: "host", id: host }), registration: () => environmentState });
         // Invalidate before publishing terminal status: progress consumers may unmount immediately.
         if ((run.kind === "scan" || run.sourceOperation === "vulnerability.candidate-scan") && !["running", "queued"].includes(run.status)) securityChanged();
         return run;
@@ -886,7 +883,7 @@ export function createHttpAdapter(options: HttpAdapterOptions = {}): DockletAdap
         return { ...entry, backups: history ?? [], backupUnavailable: !history || decorated[0]?.backupUnavailable };
       });
     },
-    ...createImageMetadata(baseUrl, fetcher), ...createStackImport(baseUrl, client, () => lifetimeGeneration, getCapability),
+    ...createImageMetadata(baseUrl, fetcher), ...createHostDetails(baseUrl, client), ...createStackImport(baseUrl, client, () => lifetimeGeneration, getCapability),
     ...createImageCommands({ baseUrl, client, capability: getCapability, generation: () => lifetimeGeneration, changed: () => { sharedReads.clear(); changeListeners.forEach((listener) => listener(["images"])); } }),
     ...createRegistryCommands({ baseUrl, client, capability: getCapability, generation: () => lifetimeGeneration, changed: () => { sharedReads.clear(); changeListeners.forEach((listener) => listener(["registries"])); } }),
     ...createProjectWorkspace({ baseUrl, client, capability: getCapability, generation: () => identityGeneration }),
