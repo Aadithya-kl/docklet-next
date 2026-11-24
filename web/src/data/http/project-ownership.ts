@@ -5,6 +5,7 @@
 // Deviations: Original effective Compose-label and explicit runtime membership projection.
 
 import type { ProjectRow } from "./inventory-mapping";
+import { representableId } from "./row-isolation";
 
 // Match backend/pkg/projects.NormalizeProjectName and compose-go v2.16.1:
 // strip non-ASCII label characters and leading separators, preserving an input
@@ -17,8 +18,15 @@ function effectiveName(project: ProjectRow): string {
   return normalizeProjectName(project.composeProjectName || project.name);
 }
 
-export function composeProjectOwner(projects: ProjectRow[], label: string | undefined, containerId?: string): ProjectRow | undefined {
+/** A project row without a representable id and a string name cannot own anything; it never affects other rows' ownership (#600). */
+export function readableProject(project: ProjectRow | null | undefined): project is ProjectRow {
+  return !!project && representableId(project.id) && typeof project.name === "string" && project.name.length > 0
+    && (project.composeProjectName === undefined || project.composeProjectName === null || typeof project.composeProjectName === "string");
+}
+
+export function composeProjectOwner(rows: ProjectRow[], label: string | undefined, containerId?: string): ProjectRow | undefined {
   if (!label) return undefined;
+  const projects = rows.filter(readableProject);
   const candidates = projects.filter((project) => effectiveName(project) === label);
   // Current responses carry the effective label even for legacy fallback rows.
   // A differing observation outranks defaults; exact default spellings then
@@ -31,5 +39,5 @@ export function composeProjectOwner(projects: ProjectRow[], label: string | unde
   // With no visible label owner, explicit backend runtime IDs retain container
   // membership (including directory fallback) for current and older peers.
   // This evidence cannot establish volume/network ownership.
-  return containerId ? projects.filter((project) => project.runtimeServices?.some((service) => service.containerId === containerId)).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)[0] : undefined;
+  return containerId ? projects.filter((project) => Array.isArray(project.runtimeServices) && project.runtimeServices.some((service) => service?.containerId === containerId)).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)[0] : undefined;
 }

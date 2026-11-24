@@ -12,9 +12,11 @@ import { splitInventoryId } from "./inventory-mapping";
 import { record, list, choice, reason, id as requiredId, invalidUpdate } from "./update-validation";
 import { baseline, points, policy, hints, checkResult } from "./update-decoders";
 import { runtimeResponseError } from "./runtime-mapping";
+import { updateEligibility } from "./update-binding";
+import { observation } from "./update-validation";
 import { MAINTENANCE_CODE } from "./problem-code";
 interface Options { baseUrl: string; client: CsrfClient; capability: (operation: string, ref: ResourceRef) => Promise<CapabilityDescriptor>; generation: () => number; changed: () => void }
-export function createStackUpdates({ baseUrl, client, capability, generation, changed }: Options): Required<Omit<UpdatesApi, "checkAllUpdates" | "restoreContainerImage" | "getContainerPreviousImage" | "getUpdateSettings" | "getUpdateCheckJob" | "getUpdateJobTargets">> {
+export function createStackUpdates({ baseUrl, client, capability, generation, changed }: Options): Required<Omit<UpdatesApi, "checkHostUpdates" | "checkAllUpdates" | "restoreContainerImage" | "getContainerPreviousImage" | "getUpdateSettings" | "getUpdateCheckJob" | "getUpdateJobTargets">> {
   async function request(operation: string, ref: ResourceRef, suffix: string, method = "GET", body?: object, reads: string[] = []): Promise<unknown> {
     const owner = generation(), current = () => { if (owner !== generation()) throw new CancelledError(); };
     for (const name of [operation, ...reads]) { const cap = await capability(name, ref); current(); if (!cap.available) throw unavailable(name, cap.resourceRef, cap.disabledReasonCode); }
@@ -42,6 +44,7 @@ export function createStackUpdates({ baseUrl, client, capability, generation, ch
   }
   const stack = (id: string) => { const [host, raw] = splitInventoryId(id); return { host, raw, ref: { kind: "stack" as const, id }, path: encodeURIComponent(raw) }; };
   return {
+    async getUpdateEligibility(id) { const s = stack(id); return updateEligibility(await request("getUpdateBaseline", s.ref, `projects/${s.path}/update-eligibility`)); },
     async getUpdateBaseline(id) { const s = stack(id); return baseline(await request("getUpdateBaseline", s.ref, `projects/${s.path}/baseline`)); },
     async listHostRestorePoints(host) { return points(await request("listHostRestorePoints", { kind: "host", id: host }, "restore-points")); },
     async listRestorePoints(id) { const s = stack(id); return points(await request("listRestorePoints", s.ref, `project/${s.path}/restore-points`), s.raw); },
@@ -53,6 +56,7 @@ export function createStackUpdates({ baseUrl, client, capability, generation, ch
     async getContainerUpdatePolicy(id) { const s = stack(id); return policy(await request("getAutoUpdatePolicy", { kind: "container", id }, `policies/container/${s.path}`), s.host, s.raw, "container"); },
     async saveContainerUpdatePolicy(id, mode, expectedRevision, window) { const s = stack(id); return save(async () => policy(await request(mode === "scheduled" ? "setAutoUpdateApply" : "setAutoUpdate", { kind: "container", id }, `policies/container/${s.path}`, "PUT", { mode, expectedRevision, ...(mode === "scheduled" ? { window } : {}) }, ["getAutoUpdatePolicy"]), s.host, s.raw, "container")); },
     async getSystemImageHints(host) { return hints(await request("listSystemComponents", { kind: "host", id: host }, "system-image-hints")); },
-    async checkStackUpdates(id) { const s = stack(id); try { checkResult(await request("checkUpdates", s.ref, `projects/${s.path}/check`, "POST")); } finally { changed(); } },
+    async checkContainerUpdate(id) { const s = stack(id); try { const info = observation(await request("installContainerUpdate", { kind: "container", id }, `containers/${s.path}/check`, "POST")); return { hasUpdate: info.hasUpdate, version: info.latestVersion || info.currentVersion }; } finally { changed(); } },
+    async checkStackUpdates(id) { const s = stack(id); try { return checkResult(await request("checkUpdates", s.ref, `projects/${s.path}/check`, "POST")); } finally { changed(); } },
   };
 }

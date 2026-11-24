@@ -10,13 +10,29 @@ import { inventoryReadBudget } from "./host-read-deadline";
 
 import type { DockletAdapter } from "@/data/adapter";
 import { AdapterOutcomeError } from "@/data/capability";
-import type { Host, InventoryObservation } from "@/domain/model";
+import type { Host, InventoryObservation, Stack } from "@/domain/model";
 import { withoutSystem } from "@/domain/system";
 import { createInventoryTransport, inventoryFailure } from "./inventory-transport";
 import { createConditionReader, withConditions, type ConditionReader } from "./runtime-conditions";
-import { normalizeProjectName } from "./project-ownership";
+import { normalizeProjectName, readableProject } from "./project-ownership";
 import { inventoryId, mapContainer, mapStack, splitInventoryId, type ContainerRow, type ProjectRow } from "./inventory-mapping";
 import { isMaintenanceError } from "../maintenance-retry";
+import { rowCollector, withUnreadable } from "./row-isolation";
+
+/** A successful host answer whose body or pages cannot be read, as opposed to a transport or host failure. */
+function malformedSuccess(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === "AbortError") return false;
+  if (!(error instanceof AdapterOutcomeError)) return true;
+  if (error.outcome.kind !== "error") return false;
+  const { code, status } = error.outcome;
+  // A non-2xx answer is a host or transport failure whatever its code says; it keeps its outcome.
+  if (status !== undefined && (status < 200 || status >= 300)) return false;
+  return /\.(invalid-page|short-page|invalid-observation|invalid-response)$/.test(code);
+}
+
+function isUnreadable(error: unknown): boolean {
+  return error instanceof AdapterOutcomeError && error.outcome.kind === "error" && error.outcome.code === "get-project.unreadable";
+}
 
 export function createInventoryReader(baseUrl: string, fetcher: typeof fetch, hosts: () => Promise<Host[]>, requireCapability: (operation: string) => Promise<void>, onState: (hostId: string, state: InventoryObservation) => void, readConditions: ConditionReader = createConditionReader(baseUrl, fetcher).read): Pick<DockletAdapter, "listStacks" | "listContainers" | "getStack"> {
   const { read, list } = createInventoryTransport(baseUrl, fetcher, onState);
@@ -24,12 +40,15 @@ export function createInventoryReader(baseUrl: string, fetcher: typeof fetch, ho
   async function hostInventory(host: Host, signal?: AbortSignal) {
     const [projects, containers, conditions] = await Promise.all([list("list-projects", host.id, "projects", undefined, signal), list("list-containers", host.id, "containers", undefined, signal), readConditions(host.id, signal)]);
     signal?.throwIfAborted();
-    const observation: InventoryObservation = mergeInventoryObservations([projects.observation, containers.observation]);
-    onState(host.id, observation);
+    const merged: InventoryObservation = mergeInventoryObservations([projects.observation, containers.observation]);
     const projectRows = projects.rows as ProjectRow[];
     const containerRows = containers.rows as ContainerRow[];
-    const allContainers = containerRows.map((row) => mapContainer(row, host.id, projectRows, observation));
-    const stacks = withoutSystem(projectRows.map((row) => mapStack(row, host.id, allContainers, observation)));
+    // One row that cannot be mapped never empties the host (#600).
+    const stackRows = rowCollector("stacks"), containerRowsRead = rowCollector("containers");
+    const allContainers = containerRowsRead.each(containerRows, (row) => mapContainer(row, host.id, projectRows, merged), (row) => row?.names?.[0]?.replace(/^\//, ""));
+    const stacks = withoutSystem(stackRows.each(projectRows, (row) => mapStack(row, host.id, allContainers, merged), (row) => row?.name));
+    const observation = withUnreadable(merged, stackRows, containerRowsRead);
+    onState(host.id, observation);
     return { ...withConditions({ stacks, containers: withoutSystem(allContainers) }, conditions), observation };
   }
 
@@ -37,19 +56,27 @@ export function createInventoryReader(baseUrl: string, fetcher: typeof fetch, ho
     // The project list owns stored updates and the visible label-owner tie rules.
     const [projects, conditions] = await Promise.all([list("list-projects", host.id, "projects"), readConditions(host.id)]);
     const projectRows = projects.rows as ProjectRow[];
-    const project = projectRows.find((row) => row.id === projectId);
+    // Unrelated rows never affect the requested one; the requested row that cannot be read is unreadable, not missing (#600).
+    const project = projectRows.find((row) => row?.id === projectId);
     if (!project) return { stacks: [], containers: [] };
+    if (!readableProject(project)) return fail("get-project.unreadable");
     const label = normalizeProjectName(project.composeProjectName || project.name);
+    const runtimeIds = Array.isArray(project.runtimeServices) ? project.runtimeServices.flatMap((service) => typeof service?.containerId === "string" && service.containerId ? [service.containerId] : []) : [];
     let containers = await list("list-containers", host.id, "containers", { label: `com.docker.compose.project=${label}` });
     // Directory fallback and stale runtime IDs can point outside this label. Only
     // that ambiguous case needs all containers to preserve concrete conflicting owners.
-    if (project.runtimeServices?.some((service) => service.containerId && !containers.rows.some((row) => row.id === service.containerId))) {
+    if (runtimeIds.some((id) => !containers.rows.some((row) => row?.id === id))) {
       containers = await list("list-containers", host.id, "containers");
     }
     const observation: InventoryObservation = mergeInventoryObservations([projects.observation, containers.observation]);
     onState(host.id, observation);
-    const allContainers = (containers.rows as ContainerRow[]).map((row) => mapContainer(row, host.id, projectRows, observation));
-    return withConditions({ stacks: withoutSystem([mapStack(project, host.id, allContainers, observation)]), containers: withoutSystem(allContainers) }, conditions);
+    // A label-filtered container list is partial: it isolates rows but never publishes the host's containers count.
+    const allContainers = rowCollector("containers").each(containers.rows as ContainerRow[], (row) => mapContainer(row, host.id, projectRows, observation));
+    // The requested project itself is the page: a row that cannot be mapped is reported as unreadable, not as missing.
+    let stack: Stack;
+    try { stack = mapStack(project, host.id, allContainers, observation); }
+    catch { return fail("get-project.unreadable"); }
+    return withConditions({ stacks: withoutSystem([stack]), containers: withoutSystem(allContainers) }, conditions);
   }
 
   async function aggregate(operation: string, onPartial?: (batches: Awaited<ReturnType<typeof hostInventory>>[], tag: <T extends object>(data: T) => T) => void, parent?: AbortSignal) {
@@ -83,15 +110,25 @@ export function createInventoryReader(baseUrl: string, fetcher: typeof fetch, ho
       // file content, which only the compose read carries and which is never cached.
       const [detail, batch, files] = await Promise.all([
         read("get-project", hostId, `projects/${encodeURIComponent(projectId)}`),
-        stackInventory(host, projectId).catch((error) => { if (isMaintenanceError(error)) throw error; onState(host.id, inventoryFailure(host.id, error)); return { stacks: [], containers: [] }; }),
+        // The list read belongs to the detail boundary: a malformed successful answer is unreadable; a transport
+        // or host failure keeps its own outcome. Only a requested row that is really absent becomes not-found (#600).
+        stackInventory(host, projectId).catch((error) => {
+          if (isMaintenanceError(error) || isUnreadable(error)) throw error;
+          onState(host.id, inventoryFailure(host.id, error));
+          throw malformedSuccess(error) ? new AdapterOutcomeError({ kind: "error", code: "get-project.unreadable" }) : error;
+        }),
         read("get-project-compose", hostId, `projects/${encodeURIComponent(projectId)}/compose`).then((result) => result.body.data, () => undefined),
       ]);
-      if (!detail.body.data || detail.body.data.id !== projectId) return fail("get-project.invalid-detail");
+      // Detail boundary (#600): a missing requested list row is absence; any other failure after the host answered is unreadable.
       const listed = batch.stacks.find((item) => item.id === inventoryId(hostId, projectId));
       if (!listed) return fail("get-project.not-found");
-      const loaded = files?.id === projectId && typeof files.composeContent === "string" ? files : undefined;
-      // Plain detail omits stored checks; the already-read list owns service/update projections.
-      return { ...mapStack(detail.body.data, hostId, batch.containers, detail.observation), services: listed.services, compose: loaded?.composeContent ?? "", env: loaded?.envContent ?? "", ...(loaded ? {} : { filesUnavailable: true }), deployments: [], restorePoints: [] };
+      try {
+        const data = detail.body.data;
+        if (!data || data.id !== projectId) throw new Error("get-project.invalid-detail");
+        const loaded = files?.id === projectId && typeof files.composeContent === "string" ? files : undefined;
+        // Plain detail omits stored checks; the already-read list owns service/update projections.
+        return { ...mapStack(data, hostId, batch.containers, detail.observation), services: listed.services, compose: loaded?.composeContent ?? "", env: loaded?.envContent ?? "", ...(loaded ? {} : { filesUnavailable: true }), deployments: [], restorePoints: [] };
+      } catch { return fail("get-project.unreadable"); }
     },
   };
 }

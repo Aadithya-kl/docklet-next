@@ -1,9 +1,14 @@
 // American English texts of the stacks feature: overview, stack page, logs and deployments.
 
 export const enStacks = {
+  hostCheck: {
+    partial: "Some targets could not be checked.", partialCount: "{count, plural, one {# target} other {# targets}} could not be checked.", openRun: "Open run",
+    check: "Check for updates", all: "Check all hosts for updates", checking: "Checking…",
+    result: "{stacks, plural, one {# stack} other {# stacks}} and {containers, plural, one {# container} other {# containers}} have updates",
+  },
   import: {"found": {"compose": "Compose file", "env-example": "Environment example", "image-config": "Image configuration", "ports": "Ports", "volumes": "Volumes", "environment": "Environment names"}, "missing": {"env-file": "Environment file required", "label-file": "Label file required", "include": "Included file required", "extends": "Extended file required", "build-context": "Build context required", "variables": "Variable values required", "compose": "Compose configuration required"}, "errors": {"invalid-reference": "Invalid source reference", "registry-not-configured": "Registry is not configured", "not-found": "Source not found", "too-large": "Source is too large", "timeout": "Source request timed out", "redirect-refused": "Source redirect refused", "source-unavailable": "Source unavailable", "invalid-compose": "Invalid Compose configuration", "unauthorized": "Registry authentication failed", "busy": "An import is already running"}},
   stopMode: {"modeUnavailable": "The hub stop mode cannot be read. Choose an explicit action below.", "down": "Shut down (remove containers)", "stop-containers": "Stop containers", "containersRemoved": "Containers removed", "definitionInvalid": "The Compose definition cannot be resolved. Repair it to restore the services list."},
-  inventory: { scopeStaleNote: "Inventory catalogue could not be refreshed.", scopeStale: "Inventory catalogue could not be refreshed", readError: "Inventory could not be read", mappingError: "Invalid inventory data", host: "{name}: {reason}.", asOf: "Stale values, as of {time}.", noSnapshot: "No retained values available yet.", updateRequired: "Agent update required", credentialRejected: "Agent token invalid", unavailable: "Host unreachable" },
+  inventory: { unreadable: "{name}: {count, plural, one {# entry} other {# entries}} could not be read and {count, plural, one {is} other {are}} not shown.", unreadableNames: "Affected: {names}.", scopeStaleNote: "Inventory catalogue could not be refreshed.", scopeStale: "Inventory catalogue could not be refreshed", readError: "Inventory could not be read", mappingError: "Invalid inventory data", host: "{name}: {reason}.", asOf: "Stale values, as of {time}.", noSnapshot: "No retained values available yet.", updateRequired: "Agent update required", credentialRejected: "Agent token invalid", unavailable: "Host unreachable" },
   serviceState: { "not-created": "Containers removed" },
   definitionHint: { "definition-invalid": "The Compose definition could not be resolved." },
   title: "Stacks",
@@ -41,6 +46,7 @@ export const enStacks = {
   columns: { name: "Stack", status: "State", host: "Host", services: "Services", updates: "Updates", labels: "Labels", load: "Load", cpu: "CPU", mem: "RAM", ports: "Ports", auto: "Auto-update", deploy: "Last deploy", actions: "Actions" },
   auto: { check: "Check only", scheduled: "Automatic · {window}" },
   empty: { title: "No stacks for these filters", description: "Reset the filters or create a new stack.", reset: "Reset filters" },
+  emptyUnreadable: { title: "Stacks could not be read", description: "The notice above names the host and the entries Docklet could not read. The other hosts are shown as usual." },
   emptyAll: { title: "No stacks yet", description: "Create a stack from Compose, docker run or a one-time import." },
   footer: "{shown} of {total} stacks{hidden, plural, =0 {} other { · # hidden}} · Row opens the stack, right-click shows the actions, hover or focus on services and updates shows details.",
   rowOpen: "Open stack {name}",
@@ -64,6 +70,8 @@ export const enStacks = {
     recordBaselineStarted: "Record baseline: deploy admitted. A successful deploy records the baseline.",
     back: "Stacks",
     notFound: "Stack not found",
+    unreadable: "Stack could not be read",
+    unreadableBody: "Docklet could not read the data of this stack from the host. The other stacks are not affected. Check the Compose file of this project on the host.",
     notFoundBody: (import.meta.env.DEV ? "The stack does not exist (anymore) in the demo data." : "The stack was not found."),
     draft: "Draft",
     draftMeta: "Not deployed yet · Target: {host} · Easy and Advanced edit the same draft.",
@@ -75,7 +83,7 @@ export const enStacks = {
     tabs: { overview: "Overview", editor: "Editor", logs: "Logs", deployments: "Deployments" },
     tabsLabel: "Stack sections",
     redeployMenu: "More deploy options",
-    actions: { start: "Start", stop: "Stop", restart: "Restart", redeploy: "Pull & redeploy", failDemo: (import.meta.env.DEV ? "Redeploy with error (demo)" : ""), check: "Check for updates" },
+    actions: { checkingSupport: "Checking update support…", updateUnsupported: "Update not offered. See the image binding reason below.", start: "Start", stop: "Stop", restart: "Restart", redeploy: "Pull & redeploy", failDemo: (import.meta.env.DEV ? "Redeploy with error (demo)" : ""), check: "Check for updates" },
   },
   overview: {
     services: "Services",

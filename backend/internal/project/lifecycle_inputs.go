@@ -68,6 +68,27 @@ func (s *ProjectService) lifecycleInputs(ctx context.Context, p *Project) (*life
 	if err != nil {
 		return nil, lifecycleFailure("update.snapshot-unavailable")
 	}
+	primaryRel, relErr := filepath.Rel(p.Path, path)
+	if relErr != nil || primaryRel == ".." || strings.HasPrefix(primaryRel, "../") {
+		return nil, bindingFailure("", "outside-project")
+	}
+	source, readErr := acfs.ReadFile(ctx, p.Path, "/"+filepath.ToSlash(primaryRel))
+	if errors.Is(readErr, os.ErrNotExist) {
+		return nil, bindingFailure("", "file-missing")
+	}
+	if readErr != nil {
+		return nil, lifecycleFailure("update.snapshot-unavailable")
+	}
+	var sourceDocument yaml.Node
+	if yaml.Unmarshal(source, &sourceDocument) != nil {
+		return nil, bindingFailure("", "unparsable")
+	}
+	if lifecycleYAMLHas(&sourceDocument, "include") || lifecycleYAMLHas(&sourceDocument, "extends") {
+		return nil, bindingFailure("", "include-extends")
+	}
+	if outsideBindingInput(&sourceDocument, p.Path) {
+		return nil, bindingFailure("", "outside-project")
+	}
 	cfg := s.settingsService.GetSettingsOrDefaults(ctx)
 	root, err := s.GetProjectsDirectory(ctx)
 	if err != nil {
@@ -82,9 +103,19 @@ func (s *ProjectService) lifecycleInputs(ctx context.Context, p *Project) (*life
 	if err != nil {
 		return nil, lifecycleFailure("update.snapshot-unavailable")
 	}
+	// Every selected Compose file must remain at the project root.
+	for _, selected := range model.ComposeFiles {
+		rel, e := filepath.Rel(p.Path, selected)
+		if e != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+			return nil, bindingFailure("", "outside-project")
+		}
+		if filepath.Dir(rel) != "." {
+			return nil, bindingFailure("", "nested-compose-file")
+		}
+	}
 	// Unsupported include/multi-file compositions cannot claim complete capture.
 	if len(model.ComposeFiles) != 1 {
-		return nil, lifecycleFailure("update.image-binding-unsupported")
+		return nil, bindingFailure("", "multiple-compose-files")
 	}
 	paths := slices.Concat(model.ComposeFiles, deps.EnvFiles)
 	if !input.Recorded() {
@@ -111,7 +142,7 @@ func (s *ProjectService) lifecycleInputs(ctx context.Context, p *Project) (*life
 		for _, path := range paths {
 			rel, e := filepath.Rel(p.Path, path)
 			if e != nil || rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
-				return nil, lifecycleFailure("update.image-binding-unsupported")
+				return nil, bindingFailure("", "outside-project")
 			}
 			content, e := acfs.ReadFile(ctx, p.Path, "/"+filepath.ToSlash(rel))
 			present := true
@@ -147,10 +178,10 @@ func (s *ProjectService) lifecycleInputs(ctx context.Context, p *Project) (*life
 		if f.Path == filepath.ToSlash(primary) {
 			var document yaml.Node
 			if yaml.Unmarshal(f.Content, &document) != nil {
-				return nil, lifecycleFailure("update.image-binding-unsupported")
+				return nil, bindingFailure("", "unparsable")
 			}
 			if lifecycleYAMLHas(&document, "include") || lifecycleYAMLHas(&document, "extends") {
-				return nil, lifecycleFailure("update.image-binding-unsupported")
+				return nil, bindingFailure("", "include-extends")
 			}
 		}
 	}
@@ -243,14 +274,23 @@ func lifecycleVersionFiles(snapshot *life.Snapshot, selections []dto.ImageSelect
 	body, _ := json.Marshal(snapshot)
 	var desired life.Snapshot
 	if json.Unmarshal(body, &desired) != nil {
-		return nil, lifecycleFailure("update.image-binding-unsupported")
+		return nil, bindingFailure("", "unparsable")
 	}
 	changes := map[string]updatertypes.ServiceImageChange{}
 	validations := map[string]updatertypes.ServiceImageChange{}
 	for _, sel := range selections {
 		svc, ok := snapshot.Model.Services[sel.Service]
-		if !ok || svc.Build != nil || strings.ContainsAny(sel.SourceReference, "$@") {
-			return nil, lifecycleFailure("update.image-binding-unsupported")
+		if !ok {
+			return nil, bindingFailure(sel.Service, "unparsable")
+		}
+		if svc.Build != nil {
+			return nil, bindingFailure(sel.Service, "build-service")
+		}
+		if refusal := referenceBindingFailure(sel.Service, sel.SourceReference); refusal != nil {
+			return nil, refusal
+		}
+		if refusal := modelBindingFailure(snapshot, sel.Service); refusal != nil {
+			return nil, refusal
 		}
 		// Rebuilds are validated against the literal field as well, but never saved.
 		validations[sel.Service] = updatertypes.ServiceImageChange{ExpectedRef: sel.SourceReference, TargetRef: sel.SourceReference}
@@ -262,47 +302,41 @@ func lifecycleVersionFiles(snapshot *life.Snapshot, selections []dto.ImageSelect
 	found := false
 	for i, f := range desired.Files {
 		if f.Path == primary {
-			// The resolved model cannot prove an interpolated source was literal.
+			// The resolved model cannot prove an interpolated source was literal. Only the
+			// selected services are written; an unselected interpolated image stays as it is.
 			var document yaml.Node
 			if yaml.Unmarshal(f.Content, &document) != nil {
-				return nil, lifecycleFailure("update.image-binding-unsupported")
+				return nil, bindingFailure("", "unparsable")
 			}
-			var check func(*yaml.Node) bool
-			check = func(n *yaml.Node) bool {
-				if n.Kind == yaml.MappingNode {
-					for j := 0; j+1 < len(n.Content); j += 2 {
-						if n.Content[j].Value == "image" && strings.Contains(n.Content[j+1].Value, "$") {
-							return false
-						}
+			serviceMap := lifecycleYAMLField(document.Content[0], "services", 0)
+			if serviceMap != nil {
+				for j := 0; j+1 < len(serviceMap.Content); j += 2 {
+					if _, selected := validations[serviceMap.Content[j].Value]; !selected {
+						continue
+					}
+					image := lifecycleYAMLField(serviceMap.Content[j+1], "image", 0)
+					if image != nil && strings.Contains(image.Value, "$") {
+						return nil, referenceBindingFailure(serviceMap.Content[j].Value, image.Value)
 					}
 				}
-				for _, c := range n.Content {
-					if !check(c) {
-						return false
-					}
-				}
-				return true
-			}
-			if !check(&document) {
-				return nil, lifecycleFailure("update.image-binding-unsupported")
 			}
 			_, _, err := edits.PrepareProjectServiceImages(f.Content, snapshot.Model, validations)
 			if err != nil {
-				return nil, lifecycleFailure("update.image-binding-unsupported")
+				return nil, writerBindingFailure(err)
 			}
 			updated := f.Content
 			if len(changes) > 0 {
 				updated, _, err = edits.PrepareProjectServiceImages(f.Content, snapshot.Model, changes)
 			}
 			if err != nil {
-				return nil, lifecycleFailure("update.image-binding-unsupported")
+				return nil, writerBindingFailure(err)
 			}
 			desired.Files[i].Content = updated
 			found = true
 		}
 	}
 	if !found {
-		return nil, lifecycleFailure("update.image-binding-unsupported")
+		return nil, bindingFailure("", "file-missing")
 	}
 	for _, sel := range selections {
 		if sel.Kind == "version" {
@@ -331,28 +365,36 @@ func lifecycleSharedImageSource(snapshot *life.Snapshot, services []string) erro
 		}
 		var document yaml.Node
 		if yaml.Unmarshal(file.Content, &document) != nil || len(document.Content) != 1 {
-			return lifecycleFailure("update.image-binding-unsupported")
+			return bindingFailure("", "unparsable")
 		}
-		serviceMap := lifecycleYAMLField(document.Content[0], "services", 0)
-		if serviceMap == nil || serviceMap.Kind != yaml.MappingNode {
-			return lifecycleFailure("update.image-binding-unsupported")
+		if err := lifecycleSharedImageSourceIn(&document, services); err != nil {
+			return err
 		}
-		images := map[string]*yaml.Node{}
-		for i := 0; i+1 < len(serviceMap.Content); i += 2 {
-			image := lifecycleYAMLField(serviceMap.Content[i+1], "image", 0)
-			if image != nil && image.Kind == yaml.AliasNode {
-				image = image.Alias
-			}
-			images[serviceMap.Content[i].Value] = image
+	}
+	return nil
+}
+
+// lifecycleSharedImageSourceIn checks an already parsed primary document.
+func lifecycleSharedImageSourceIn(document *yaml.Node, services []string) error {
+	serviceMap := lifecycleYAMLField(document.Content[0], "services", 0)
+	if serviceMap == nil || serviceMap.Kind != yaml.MappingNode {
+		return bindingFailure("", "unparsable")
+	}
+	images := map[string]*yaml.Node{}
+	for i := 0; i+1 < len(serviceMap.Content); i += 2 {
+		image := lifecycleYAMLField(serviceMap.Content[i+1], "image", 0)
+		if image != nil && image.Kind == yaml.AliasNode {
+			image = image.Alias
 		}
-		for key, image := range images {
-			if image == nil || !lifecycleServiceSelected(services, key) {
-				continue
-			}
-			for other, candidate := range images {
-				if other != key && image == candidate {
-					return lifecycleFailure("update.image-binding-unsupported")
-				}
+		images[serviceMap.Content[i].Value] = image
+	}
+	for key, image := range images {
+		if image == nil || !lifecycleServiceSelected(services, key) {
+			continue
+		}
+		for other, candidate := range images {
+			if other != key && image == candidate {
+				return bindingFailure(key, "shared-image-anchor")
 			}
 		}
 	}
@@ -388,4 +430,40 @@ func lifecycleYAMLField(node *yaml.Node, key string, depth int) *yaml.Node {
 		}
 	}
 	return nil
+}
+
+// writerBindingFailure keeps the writer's scope: a refusal of one service's image
+// source names that service; any other writer refusal concerns the whole document.
+func writerBindingFailure(err error) *imageDTO.OperationError {
+	var local *edits.ServiceSourceError
+	if errors.As(err, &local) {
+		return bindingFailure(local.Service, "unparsable")
+	}
+	return bindingFailure("", "unparsable")
+}
+
+// lifecycleWriterRefusals runs the admission writer's read-only check once for the
+// given services of the primary Compose file (each as a rebuild of its own image).
+func lifecycleWriterRefusals(snapshot *life.Snapshot, services []string) (map[string]*imageDTO.OperationError, *imageDTO.OperationError) {
+	primary := filepath.Base(snapshot.Model.ComposeFiles[0])
+	for _, f := range snapshot.Files {
+		if f.Path != primary {
+			continue
+		}
+		changes := make(map[string]updatertypes.ServiceImageChange, len(services))
+		for _, name := range services {
+			image := snapshot.Model.Services[name].Image
+			changes[name] = updatertypes.ServiceImageChange{ExpectedRef: image, TargetRef: image}
+		}
+		refusals, err := edits.ValidateProjectServiceImages(f.Content, snapshot.Model, changes)
+		if err != nil {
+			return nil, writerBindingFailure(err)
+		}
+		out := make(map[string]*imageDTO.OperationError, len(refusals))
+		for name, refusal := range refusals {
+			out[name] = writerBindingFailure(refusal)
+		}
+		return out, nil
+	}
+	return nil, bindingFailure("", "file-missing")
 }

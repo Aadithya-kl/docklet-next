@@ -30,6 +30,7 @@ import { useHostDetails } from "./use-host-details";
 import { unraidDetected } from "./unraid-detection";
 import { identityLifetime } from "@/data/identity-lifetime";
 import { useAdapter } from "@/data/use-adapter";
+import { unreadableRows } from "@/domain/unreadable";
 
 function Row({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
   return (
@@ -100,6 +101,7 @@ interface HostCardProps {
 
 /** One host with connection, directories, file IDs and actions; filter state stays visible. */
 export function HostCard({ host, system, stacks, containers, unraid, allIds, onFiles }: HostCardProps) {
+  const unreadable = unreadableRows(host.inventory, ["stacks", "containers"]).count;
   const t = useTranslations("hosts");
   const tn = useTranslations("connections");
   const tc = useTranslations("common.host");
@@ -161,7 +163,7 @@ export function HostCard({ host, system, stacks, containers, unraid, allIds, onF
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
         <Row label={t("card.connection")}>{host.networkRoute === "tailnet" ? tn("tailnet") : t(local ? "mode.localLong" : `mode.${host.connection}Long`)}</Row>
         <Row label={t(local ? "card.hubAddress" : "card.address")} mono>
-          {host.networkRoute === "tailnet" ? tn("routeHint") : dt(host.address) || t(host.connection === "edge" ? "card.addressNotRequired" : "card.addressNotConfigured")}
+          {host.networkRoute === "tailnet" ? <><span>{[host.tailnet?.dnsName, host.tailnet?.addresses?.find((address) => !address.includes(":")), tn("name")].filter(Boolean).join(" · ")}</span><p className="mt-1 font-sans text-xs text-muted-foreground">{tn("routeHint")}</p></> : dt(host.address) || t(host.connection === "edge" ? "card.addressNotRequired" : "card.addressNotConfigured")}
         </Row>
         <Row label={t("card.projectDir")} mono>
           {projectDir || t("card.unavailable")}
@@ -184,7 +186,7 @@ export function HostCard({ host, system, stacks, containers, unraid, allIds, onF
       {host.status === "token-rejected" && <p role="status" className="text-sm text-destructive">{t("tokenRejected")}</p>}
       {!local && <AgentReportSection host={host} />}
       {(system || !host.agentVersion && !host.agentReport) && <CapabilityGate operation="listSystemComponents" resourceRef={{ kind: "host", id: host.id }}><SystemSection component={system} /></CapabilityGate>}
-      <p className="text-xs text-muted-foreground">{stacks === undefined || containers === undefined ? t("card.usageUnknown") : t("card.usage", { stacks, containers })}</p>
+      <p className="text-xs text-muted-foreground">{stacks === undefined || containers === undefined ? t("card.usageUnknown") : t("card.usage", { stacks, containers })}{unreadable > 0 && <span className="text-warning"> · {t("card.unreadable", { count: unreadable })}</span>}</p>
       <UnraidSwitch hostId={host.id} count={unraid} />
       <footer className="flex flex-wrap gap-2 border-t pt-3">
         {pending ? (

@@ -74,6 +74,7 @@ GET /environments/{id}/updater/history
 GET /environments/{id}/updater/policies
 GET /environments/{id}/updater/policies/{kind}/{targetId}
 GET /environments/{id}/updater/projects/{projectId}/baseline
+GET /environments/{id}/updater/projects/{projectId}/update-eligibility
 GET /environments/{id}/updater/restore-points
 GET /environments/{id}/updater/status
 GET /environments/{id}/updater/system-image-hints
@@ -181,6 +182,7 @@ POST /environments/{id}/system/containers/stop-all
 POST /environments/{id}/system/convert
 POST /environments/{id}/system/prune
 POST /environments/{id}/system/upgrade
+POST /environments/{id}/updater/containers/{containerId}/check
 POST /environments/{id}/updater/projects/{projectId}/check
 POST /environments/{id}/updater/projects/{projectId}/update
 POST /environments/{id}/updater/run

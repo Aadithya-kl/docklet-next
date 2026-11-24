@@ -36,7 +36,6 @@ import (
 	"github.com/florianfinn/docklet-next/backend/internal/middleware"
 	"github.com/florianfinn/docklet-next/backend/internal/role"
 	"github.com/florianfinn/docklet-next/backend/internal/settings"
-	"github.com/florianfinn/docklet-next/backend/internal/updater"
 	"github.com/florianfinn/docklet-next/backend/pkg/authz"
 	"github.com/florianfinn/docklet-next/backend/pkg/libarcane"
 	"github.com/florianfinn/docklet-next/backend/pkg/scheduler/jobcontext"
@@ -55,7 +54,7 @@ import (
 // NOTE: This is intentionally separate from settings.SettingsService to keep the API
 // surface job-focused and to centralize schedule validation/rescheduling.
 type JobService struct {
-	imagePolicies *updater.UpdaterService
+	imagePolicies hostUpdateChecker
 	activity      *activity.ActivityService
 	activityMu    sync.Mutex
 	runs          *runs.Coordinator
@@ -347,7 +346,7 @@ func (s *JobService) legacyListJobs(ctx context.Context) (*jobschedule.JobListRe
 		if jobMeta.ID == "auto-update" || jobMeta.ID == "image-polling" {
 			continue
 		}
-		if jobMeta.ID == "update-check" && s.cfg != nil && (s.cfg.AgentMode || s.cfg.EdgeAgent) {
+		if (jobMeta.ID == "update-check" || jobMeta.ID == hostUpdateCheckJob) && s.cfg != nil && (s.cfg.AgentMode || s.cfg.EdgeAgent) {
 			continue
 		}
 		schedule := s.getJobScheduleInternal(ctx, jobMeta)
@@ -647,6 +646,9 @@ func (s *JobService) authorizeRunInternal(ctx context.Context, run scheduler.Run
 }
 
 func (s *JobService) executeRunInternal(ctx context.Context, run scheduler.Run) (scheduler.Outcome, error) {
+	if run.JobID == hostUpdateCheckJob {
+		return s.executeHostUpdateCheck(ctx, run)
+	}
 	if retiredUpdateControl(run.JobID) != nil {
 		return scheduler.Outcome{Status: scheduler.Failed, Code: "update.agent-local-job-disabled"}, nil
 	}
@@ -725,6 +727,9 @@ func safeJobInternal(jobID string) bool {
 }
 
 func (s *JobService) reconcileRunInternal(ctx context.Context, run scheduler.Run) (scheduler.Outcome, error) {
+	if run.JobID == hostUpdateCheckJob {
+		return s.executeHostUpdateCheck(ctx, run)
+	}
 	if retiredUpdateControl(run.JobID) != nil {
 		return scheduler.Outcome{Status: scheduler.Failed, Code: "update.agent-local-job-disabled"}, nil
 	}

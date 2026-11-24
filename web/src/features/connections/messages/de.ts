@@ -6,11 +6,14 @@
 
 export const deConnections = {
   "steps": {
+    "hubNotJoined": "Der Hub ist noch nicht im Tailnet. Prüfe den Verbindungsstatus und starte den Test erneut.",
+    "joinRetry": "Speichere die Zugangsdaten erneut oder führe den Test nach der Korrektur in der Tailscale-Konsole erneut aus.",
+    "refusedTags": "Abgelehnte Tags: {tags}",
     "policyWhere": "Tailscale-Adminkonsole → Access controls → JSON editor",
     "policyWhereCustom": "Richtliniendatei deines Kontrollservers",
     "openPolicy": "Access controls öffnen",
     "formsToggle": "Kein JSON-Editor? Formulare nutzen",
-    "formsTags": "Tags: jedes Tag mit diesem Besitzer anlegen.",
+    "formsTags": "Tags: jedes Tag mit den unten gezeigten Besitzern anlegen.",
     "formsGrant": "Zugriffsregel (Grant):",
     "tagName": "Tag-Name",
     "tagOwner": "Tag-Besitzer",
@@ -40,6 +43,7 @@ export const deConnections = {
     "testStates": { "pass": "Bestanden", "fail": "Fehlgeschlagen", "skipped": "Übersprungen", "unknown": "Unbekannt" },
     "testChecks": { "credential": "Zugangsdaten akzeptiert", "agent-key": "Getaggter Agent-Schlüssel erstellt", "cleanup": "Testschlüssel gelöscht", "hub-joined": "Hub ist im Tailnet", "hub-tag": "Hub trägt sein Tag", "hub-address": "Hub hat eine Tailnet-Adresse" }
   },
+  "tags-not-permitted": "Tailscale hat die angeforderten Tags für diese Zugangsdaten abgelehnt. Lege Zugangsdaten mit nur tag:docklet-hub an und lass in der Richtlinie tag:docklet-hub das Tag tag:docklet-agent besitzen (Schritt 1).",
   "mint-refused": "Die Zugangsdaten dürfen möglicherweise keine Agent-Schlüssel erstellen. Prüfe den Bereich Auth keys: write und das Tag tag:docklet-agent.",
   "test-cleanup-failed": "Der Testschlüssel konnte nicht gelöscht werden. Er läuft nach fünf Minuten ab.",
   "test-running": "Ein Einrichtungstest läuft bereits. Warte, bis er abgeschlossen ist.",
@@ -66,7 +70,7 @@ export const deConnections = {
   "manualHint": "Jetzt einen Hub-Schlüssel einfügen, später pro Host einen eigenen einmaligen Schlüssel.",
   "createOAuth": "2. OAuth-Trust-Credential anlegen",
   "createManual": "2. Hub-Auth-Schlüssel anlegen",
-  "createOAuthHint": "Bereich und beide Tags unten wählen, dann Client-ID und Secret in Schritt 3 einfügen.",
+  "createOAuthHint": "Wähle Auth keys: write und nur tag:docklet-hub und kopiere Client-ID und Secret in Schritt 3.",
   "createManualHint": "Vorab genehmigt, mit dem Hub-Tag unten. Jeder Host bekommt später einen eigenen Einmalschlüssel.",
   "console": "Adminkonsole öffnen",
   "policy": "1. Richtlinie einfügen",
@@ -78,6 +82,9 @@ export const deConnections = {
   "clientId": "Client-ID",
   "credentialLabel": "Client-Secret",
   "authKey": "Hub-Auth-Schlüssel",
+  "savedValue": "Gespeichert",
+  "replaceValue": "Ersetzen",
+  "cancelReplace": "Abbrechen",
   "stored": "Zugangsdaten sind gespeichert. Leer lassen, um sie beizubehalten.",
   "credentialHint": "Nur schreibbar: Das gespeicherte Secret wird nicht erneut angezeigt.",
   "loading": "Verbindung wird geladen…",

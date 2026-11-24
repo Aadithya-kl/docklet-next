@@ -12,7 +12,8 @@ import { splitInventoryId } from "./inventory-mapping";
 import { runtimeResponseError } from "./runtime-mapping";
 import { record, id, date, choice, bool, optionalDate, list, reason } from "./update-validation";
 
-export function createUpdateSettings(o: { baseUrl: string; client: CsrfClient; generation: () => number; capability: (op: string, ref: ResourceRef) => Promise<CapabilityDescriptor> }): Required<Pick<UpdatesApi, "getUpdateSettings" | "checkAllUpdates" | "getContainerPreviousImage" | "getUpdateCheckJob" | "getUpdateJobTargets">> {
+/** `updateCheckJob` lets a caller share one hub jobs read between the settings projection and its own rows. */
+export function createUpdateSettings(o: { baseUrl: string; client: CsrfClient; generation: () => number; accepted?: (host: string) => void; capability: (op: string, ref: ResourceRef) => Promise<CapabilityDescriptor>; updateCheckJob?: () => Promise<{ enabled: boolean; schedule: string; nextRun?: string }> }): Required<Pick<UpdatesApi, "checkHostUpdates" | "getUpdateSettings" | "checkAllUpdates" | "getContainerPreviousImage" | "getUpdateCheckJob" | "getUpdateJobTargets">> {
   async function request(path: string, method = "GET", operation?: string, ref: ResourceRef = { kind: "hub", id: "0" }) {
     const version = o.generation(), current = () => { if (version !== o.generation()) throw new CancelledError(); };
     if (operation) { const cap = await o.capability(operation, ref); current(); if (!cap.available) throw unavailable(operation, ref, cap.disabledReasonCode); }
@@ -36,7 +37,7 @@ export function createUpdateSettings(o: { baseUrl: string; client: CsrfClient; g
     async getUpdateJobTargets(host, jobId, runId) {
       const run = record(await request(`/environments/${encodeURIComponent(host)}/jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(runId)}`));
       if (id(run.id) !== runId || id(run.jobId) !== jobId || id(run.environmentId) !== host) throw new AdapterOutcomeError({ kind: "error", code: "http.error" });
-      return list(record(run.outcome).targets ?? null).map((raw) => { const t = record(raw); return { id: id(t.id), status: choice(t.status, ["queued", "waiting", "running", "retrying", "succeeded", "partial", "skipped", "failed", "needs_attention", "canceled"]), code: reason(t.code), activityId: t.activityId === undefined ? undefined : id(t.activityId), environmentId: t.environmentId === undefined ? undefined : id(t.environmentId), targetId: t.targetId === undefined ? undefined : id(t.targetId) }; });
+      return list(record(run.outcome).targets ?? null).map((raw) => { const t = record(raw); return { id: id(t.id), status: choice(t.status, ["queued", "waiting", "running", "retrying", "succeeded", "partial", "skipped", "failed", "needs_attention", "canceled"]), code: reason(t.code), activityId: t.activityId === undefined ? undefined : id(t.activityId), environmentId: t.environmentId === undefined ? undefined : id(t.environmentId), targetKind: t.targetKind === undefined ? undefined : choice(t.targetKind, ["stack", "container"]), targetId: t.targetId === undefined ? undefined : id(t.targetId) }; });
     },
     async getUpdateSettings() {
       const raw = await request("/environments/0/settings", "GET", "saveSettings");
@@ -46,9 +47,23 @@ export function createUpdateSettings(o: { baseUrl: string; client: CsrfClient; g
       const interval = choice(values.updateCheckInterval, ["6h", "12h", "24h"]), notify = choice(values.updateNotify, ["true", "false"]) === "true";
       let nextRun: string | undefined, projectionUnavailable = false;
       try {
-        nextRun = (await checkJob("0")).nextRun;
+        nextRun = (await (o.updateCheckJob ?? (() => checkJob("0")))()).nextRun;
       } catch (error) { if (error instanceof CancelledError) throw error; projectionUnavailable = true; }
       return { interval, notify, timeZone, nextRun, projectionUnavailable };
+    },
+    async checkHostUpdates(host) {
+      const target = host ?? "0", job = host === undefined ? "update-check" : "update-check-host";
+      id(target);
+      const path = `/environments/${encodeURIComponent(target)}/jobs/${job}`;
+      const envelope = record(await request(host === undefined ? "/updater/check-all" : `${path}/run`, "POST", "checkAllUpdates"));
+      if (envelope.success !== true) throw new AdapterOutcomeError({ kind: "error", code: "runtime.admission-unknown" });
+      const runId = id(envelope.runId);
+      // The action store follows activity IDs; scheduler IDs remain in jobRef.
+      const run = record(await request(`${path}/runs/${encodeURIComponent(runId)}`));
+      if (id(run.id) !== runId || run.jobId !== job || run.environmentId !== target) throw new AdapterOutcomeError({ kind: "error", code: "runtime.admission-unknown" });
+      const activityId = id(run.activityId);
+      o.accepted?.(target);
+      return activityId;
     },
     async checkAllUpdates() {
       const envelope = record(await request("/updater/check-all", "POST", "checkAllUpdates"));

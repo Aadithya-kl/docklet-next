@@ -1,5 +1,5 @@
 // Source: api/openapi.json
-// Revision: 1f35e51f829cb98ae0b924185316726a67f22ce489045ddebe3ca47a6fefde47
+// Revision: 1b67bb9f18be8c4d529f3f616096aa71485e1d89b05cbf1580721c1fd911ce7e
 // Retrieved: 2026-10-13
 // License: BSD-3-Clause
 // Deviations: Generated TypeScript declarations from the local Huma export.
@@ -3625,6 +3625,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/environments/{id}/updater/containers/{containerId}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check one container for an image update */
+        post: operations["check-container-update"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/environments/{id}/updater/history": {
         parameters: {
             query?: never;
@@ -3725,6 +3742,23 @@ export interface paths {
         put?: never;
         /** Admit stack image lifecycle; volume data is excluded */
         post: operations["update-project-images"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/environments/{id}/updater/projects/{projectId}/update-eligibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read which services Docklet can update safely */
+        get: operations["get-update-eligibility"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5001,6 +5035,22 @@ export interface paths {
         put: operations["update-proxy-instance"];
         post?: never;
         delete: operations["remove-proxy-instance"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/modules/proxy/instances/{instanceId}/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["adopt-proxy-instance"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -7301,6 +7351,18 @@ export interface components {
             /** @description Whether the request was successful */
             success: boolean;
         };
+        BaseApiResponseImageUpdateInfo: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example /api/schemas/BaseApiResponseImageUpdateInfo.json
+             */
+            readonly $schema?: string;
+            /** @description Response data */
+            data: components["schemas"]["ImageUpdateInfo"];
+            /** @description Whether the request was successful */
+            success: boolean;
+        };
         BaseApiResponseImageUsageCounts: {
             /**
              * Format: uri
@@ -7821,6 +7883,18 @@ export interface components {
             /** @description Whether the request was successful */
             success: boolean;
         };
+        BaseApiResponseProxyAdoption: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example /api/schemas/BaseApiResponseProxyAdoption.json
+             */
+            readonly $schema?: string;
+            /** @description Response data */
+            data: components["schemas"]["ProxyAdoption"];
+            /** @description Whether the request was successful */
+            success: boolean;
+        };
         BaseApiResponseProxyCertificateObservation: {
             /**
              * Format: uri
@@ -8046,6 +8120,18 @@ export interface components {
             readonly $schema?: string;
             /** @description Response data */
             data: components["schemas"]["UpdaterSystemImageHints"];
+            /** @description Whether the request was successful */
+            success: boolean;
+        };
+        BaseApiResponseUpdaterUpdateEligibility: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example /api/schemas/BaseApiResponseUpdaterUpdateEligibility.json
+             */
+            readonly $schema?: string;
+            /** @description Response data */
+            data: components["schemas"]["UpdaterUpdateEligibility"];
             /** @description Whether the request was successful */
             success: boolean;
         };
@@ -10823,6 +10909,14 @@ export interface components {
             };
             name: string;
         };
+        ImageBinding: {
+            /** @enum {string} */
+            reason: "variable-reference" | "digest-pinned" | "build-service" | "include-extends" | "multiple-compose-files" | "outside-project" | "shared-image-anchor" | "nested-compose-file" | "unwritable-file" | "unparsable" | "file-missing";
+            /** @enum {string} */
+            scope: "project" | "service";
+            service?: string;
+            variable?: string;
+        };
         ImageDetailSummary: {
             architecture: string;
             author: string;
@@ -10881,6 +10975,7 @@ export interface components {
             success: boolean;
         };
         ImageProblem: {
+            binding?: components["schemas"]["ImageBinding"];
             blocker?: components["schemas"]["ImageRuntimeIdentityBlocker"];
             /** @enum {string} */
             code: "agent.unavailable" | "container.origin-locked" | "container.recreate-ambiguous" | "container.recreate-recovered" | "deploy.point-unavailable" | "deploy.point-no-baseline" | "image.active-update-protected" | "image.busy" | "image.changed" | "image.in-use" | "image.invalid-archive" | "image.invalid-prune" | "image.invalid-reference" | "image.load-failed" | "image.not-found" | "image.prune-failed" | "image.pull-failed" | "image.remove-failed" | "image.reserved-reference" | "image.restore-point-protected" | "image.system-protected" | "image.tag-failed" | "image.usage-unavailable" | "registry.authentication-failed" | "registry.authentication-required" | "registry.credential-unavailable" | "registry.exists" | "registry.inline-credentials-not-allowed" | "registry.invalid-config" | "registry.not-found" | "registry.persistence-failed" | "registry.rate-limited" | "registry.sync-failed" | "registry.unavailable" | "runtime.target-unavailable" | "runtime.invalid-acknowledgement" | "restore.deploy-failed" | "restore.image-mismatch" | "restore.in-use" | "restore.not-found" | "restore.shared-reference" | "restore.unavailable" | "settings.invalid-time-zone" | "update.agent-local-job-disabled" | "update.auto-excluded" | "update.baseline-unavailable" | "update.check-unavailable" | "update.config-drift" | "update.deploy-failed" | "update.image-binding-unsupported" | "update.invalid-policy" | "update.invalid-target" | "update.path-retired" | "update.permission-denied" | "update.persistence-failed" | "update.policy-changed" | "update.requires-hub-update" | "update.schedule-hub-owned" | "update.schedule-owner-unset" | "update.service-coupled" | "update.snapshot-unavailable" | "update.system-version-unknown" | "update.candidate-changed" | "update.target-changed" | "update.target-not-found" | "update.unstable" | "update.auto-restored" | "update.auto-restore-failed" | "update.auto-restore-unavailable" | "update.interrupted" | "update.candidate-failed" | "restore.files-changed" | "container.auto-remove";
@@ -12000,6 +12095,20 @@ export interface components {
             restart: boolean;
             unresolvedReferences: string[] | null;
         };
+        ProxyAdoption: {
+            instance: components["schemas"]["ProxyInstance"];
+            operationId?: string;
+            /** @enum {string} */
+            outcome: "current" | "adopted" | "refused";
+            /** @enum {string} */
+            reason?: "container-missing" | "name-changed" | "source-changed" | "mode-changed" | "kind-changed" | "operation-open" | "ambiguous" | "held-by-instance" | "module-off";
+            supersededBy?: string;
+        };
+        ProxyAdoptionReceipt: {
+            containerId: string;
+            previousContainerId: string;
+            startedAt: string;
+        };
         ProxyApplyRequest: {
             /**
              * Format: uri
@@ -12224,6 +12333,7 @@ export interface components {
             path: string;
         };
         ProxyOperation: {
+            adoption?: components["schemas"]["ProxyAdoptionReceipt"];
             certificate?: components["schemas"]["ProxyCertificateObservation"];
             /** Format: date-time */
             createdAt: string;
@@ -13529,11 +13639,14 @@ export interface components {
         };
         TailnetConnection: {
             /** @enum {string} */
-            code?: "tailnet.credential-rejected" | "tailnet.coordination-unreachable" | "tailnet.not-connected" | "tailnet.mtls-unsupported";
+            code?: "tailnet.credential-rejected" | "tailnet.coordination-unreachable" | "tailnet.not-connected" | "tailnet.mtls-unsupported" | "tailnet.tags-not-permitted";
+            refusedTags?: string[] | null;
             /** @enum {string} */
             state: "off" | "joining" | "connected" | "control-unreachable" | "error";
         };
         TailnetHostPeer: {
+            addresses?: string[] | null;
+            dnsName?: string;
             /** @description hub, peer, tunnel or none */
             failingLink: string;
             /** Format: date-time */
@@ -13549,17 +13662,19 @@ export interface components {
         };
         TailnetProblem: {
             /** @enum {string} */
-            code: "tailnet.credential-rejected" | "tailnet.coordination-unreachable" | "tailnet.not-connected" | "tailnet.key-mint-failed" | "tailnet.provider-unavailable" | "tailnet.mtls-unsupported" | "tailnet.mint-refused" | "tailnet.test-cleanup-failed" | "tailnet.test-running";
+            code: "tailnet.credential-rejected" | "tailnet.coordination-unreachable" | "tailnet.not-connected" | "tailnet.key-mint-failed" | "tailnet.provider-unavailable" | "tailnet.mtls-unsupported" | "tailnet.mint-refused" | "tailnet.test-cleanup-failed" | "tailnet.test-running" | "tailnet.tags-not-permitted";
             /** Format: int64 */
             providerStatus?: number;
+            refusedTags?: string[] | null;
             /** Format: int64 */
             status: number;
         };
         TailnetProvisioning: {
             /** @enum {string} */
-            code?: "tailnet.credential-rejected" | "tailnet.provider-unavailable";
+            code?: "tailnet.credential-rejected" | "tailnet.provider-unavailable" | "tailnet.tags-not-permitted";
             /** Format: int64 */
             providerStatus?: number;
+            refusedTags?: string[] | null;
             /** @enum {string} */
             state: "not-configured" | "not-applicable" | "checking" | "ok" | "rejected" | "unavailable";
         };
@@ -13612,11 +13727,12 @@ export interface components {
         };
         TailnetTestCheck: {
             /** @enum {string} */
-            code?: "tailnet.credential-rejected" | "tailnet.provider-unavailable" | "tailnet.not-connected" | "tailnet.mint-refused" | "tailnet.test-cleanup-failed" | "tailnet.test-running";
+            code?: "tailnet.credential-rejected" | "tailnet.provider-unavailable" | "tailnet.not-connected" | "tailnet.mint-refused" | "tailnet.test-cleanup-failed" | "tailnet.test-running" | "tailnet.tags-not-permitted";
             /** @enum {string} */
             id: "credential" | "agent-key" | "cleanup" | "hub-joined" | "hub-tag" | "hub-address";
             /** Format: int64 */
             providerStatus?: number;
+            refusedTags?: string[] | null;
             /** @enum {string} */
             state: "pass" | "fail" | "skipped" | "unknown";
         };
@@ -13859,6 +13975,11 @@ export interface components {
             /** Format: int64 */
             updated: number;
         };
+        UpdaterServiceEligibility: {
+            binding?: components["schemas"]["ImageBinding"];
+            eligible: boolean;
+            service: string;
+        };
         UpdaterStatus: {
             containerIds: string[] | null;
             projectIds: string[] | null;
@@ -13894,6 +14015,10 @@ export interface components {
             platform: string;
             service: string;
             version: string;
+        };
+        UpdaterUpdateEligibility: {
+            project?: components["schemas"]["ImageBinding"];
+            services: components["schemas"]["UpdaterServiceEligibility"][] | null;
         };
         UpdaterUpdatePolicyInput: {
             /**
@@ -14203,6 +14328,10 @@ export interface components {
             updateAvailable: boolean;
         };
         VersionOnboardingChecks: {
+            /** Format: int32 */
+            agentGid?: number | null;
+            /** Format: int32 */
+            agentUid?: number | null;
             /** Format: int32 */
             ownerGid: number | null;
             /** Format: int32 */
@@ -30196,6 +30325,103 @@ export interface operations {
             };
         };
     };
+    "check-container-update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Environment ID */
+                id: string;
+                /** @description Container ID */
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BaseApiResponseImageUpdateInfo"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": (components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"]) | components["schemas"]["RequestProblem"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     "get-updater-history": {
         parameters: {
             query?: {
@@ -30911,6 +31137,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActivityRuntimeFailureResponse"] | components["schemas"]["ErrorModel"] | components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    "get-update-eligibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BaseApiResponseUpdaterUpdateEligibility"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": (components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"]) | components["schemas"]["RequestProblem"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Typed neutral image or registry failure */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageOperationError"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
                 };
             };
         };
@@ -38902,6 +39223,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BaseApiResponseBool"];
+                };
+            };
+            /** @description Proxy refusal */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProxyProblem"] | components["schemas"]["ModulesModuleProblem"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Proxy refusal */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProxyProblem"] | components["schemas"]["ModulesModuleProblem"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Proxy refusal */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProxyProblem"] | components["schemas"]["ModulesModuleProblem"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Proxy refusal */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProxyProblem"] | components["schemas"]["ModulesModuleProblem"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Proxy refusal */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProxyProblem"] | components["schemas"]["ModulesModuleProblem"] | components["schemas"]["ErrorModel"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "adopt-proxy-instance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BaseApiResponseProxyAdoption"];
                 };
             };
             /** @description Proxy refusal */

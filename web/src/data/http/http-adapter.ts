@@ -110,7 +110,7 @@ const IMPLEMENTED = new Set<string>([
   "installContainerUpdate",
   "restoreContainerImage",
   "getContainerPreviousImage",
-  "checkAllUpdates",
+  "checkAllUpdates", "checkHostUpdates",
   "getUpdateSettings",
   "listSchedule",
   "getSystemImageHints",
@@ -731,8 +731,12 @@ export function createHttpAdapter(options: HttpAdapterOptions = {}): DockletAdap
     }
     catch (error) { throw classifiedError({ code: "listHosts.mapping-error", cause: error }); }
   }
-  function observeHost(hostId: string, state: InventoryObservation) {
+  function observeHost(hostId: string, observed: InventoryObservation) {
     const old = observations.get(hostId);
+    // Each reader owns the unreadable-row kinds it maps (a count of 0 clears its kind); other kinds keep their counts.
+    const unreadable = Object.fromEntries(Object.entries({ ...old?.unreadable, ...observed.unreadable }).filter(([, rows]) => rows.count > 0));
+    const { unreadable: _reported, ...rest } = observed;
+    const state: InventoryObservation = Object.keys(unreadable).length ? { ...rest, unreadable } : rest;
     observations.set(hostId, state);
     if (JSON.stringify(old) !== JSON.stringify(state)) changeListeners.forEach((listener) => listener(["hosts"]));
   }
@@ -831,7 +835,7 @@ export function createHttpAdapter(options: HttpAdapterOptions = {}): DockletAdap
     tailnet: tailnet.api,
     ...createSettingsCore(baseUrl, client),
  ...createModulesApi(baseUrl, client),
-    ...createUpdateSettings({ baseUrl, client, capability: getCapability, generation: () => identityGeneration }),
+    ...createUpdateSettings({ baseUrl, client, capability: getCapability, generation: () => identityGeneration, accepted: (host) => refreshHost(host) }),
     ...createNotificationSettings({ baseUrl, client, capability: getCapability, generation: () => identityGeneration }),
     ...hubBackups,
     // The page's detailed status read is also the browser-wide maintenance observation of this identity.
@@ -891,7 +895,7 @@ export function createHttpAdapter(options: HttpAdapterOptions = {}): DockletAdap
     ...createVolumePrune({ baseUrl, client, capability: getCapability, changed: () => { sharedReads.clear(); changeListeners.forEach((listener) => listener(["volumes"])); } }, listHosts),
     ...createNetworkCommands({ baseUrl, client, capability: getCapability, changed: () => { sharedReads.clear(); changeListeners.forEach((listener) => listener(["topology", "containers"])); } }),
     ...createVolumeCommands({ baseUrl, client, capability: getCapability, changed: () => { sharedReads.clear(); changeListeners.forEach((listener) => listener(["volumes"])); } }),
-    listSchedule: createScheduleReader(baseUrl, client, listHosts, getCapability, () => identityGeneration, backups.api.getBackupOverview, () => adapter.getUpdateSettings!()),
+    listSchedule: createScheduleReader(baseUrl, client, listHosts, getCapability, () => identityGeneration, backups.api.getBackupOverview),
     listActions: () => principal?.isAdmin === false ? Promise.resolve(runtime.retained()) : actions.load(),
     observeActionDetail(host, id, listener) {
       const offActions = adapter.subscribeActions(() => {});

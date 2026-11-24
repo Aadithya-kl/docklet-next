@@ -129,7 +129,8 @@ func (s *UpdaterService) executeImagePolicyTarget(ctx context.Context, p *imageP
 	if err != nil || check == nil {
 		return skip(policyCode(err, "update.check-unavailable"))
 	}
-	if check.Status == "failed" || check.Status == "unknown" || check.Status == "error" || check.Status == "not_pulled" {
+	// A build-only project is an empty observation: it replaces earlier candidates like any check.
+	if !withoutRegistryImages(check) && (check.Status == "failed" || check.Status == "unknown" || check.Status == "error" || check.Status == "not_pulled") {
 		return skip("update.check-unavailable")
 	}
 	candidates, err := s.observeImagePolicy(ctx, p, one, check)
@@ -422,7 +423,7 @@ func (s *UpdaterService) deliverImagePolicyEntry(ctx context.Context, p *imagePo
 
 // CheckPolicyProject is the public/manual check consumer. Executor checks remain
 // observations only; all policy notifications are deduplicated on the hub.
-func (s *UpdaterService) CheckPolicyProject(ctx context.Context, env, target string) (*projectDTO.UpdateInfo, error) {
+func (s *UpdaterService) checkPolicyProject(ctx context.Context, env, target string) (*projectDTO.UpdateInfo, error) {
 	if s.config != nil && (s.config.AgentMode || s.config.EdgeAgent) {
 		return s.CheckProjectUpdates(ctx, target)
 	}
@@ -440,7 +441,7 @@ func (s *UpdaterService) CheckPolicyProject(ctx context.Context, env, target str
 	if err != nil {
 		return nil, err
 	}
-	if check == nil || check.Status == "failed" || check.Status == "unknown" || check.Status == "error" || check.Status == "not_pulled" {
+	if check == nil || !withoutRegistryImages(check) && (check.Status == "failed" || check.Status == "unknown" || check.Status == "error" || check.Status == "not_pulled") {
 		return check, imageDTO.Failure("update.check-unavailable", 503)
 	}
 	result := *check
@@ -492,4 +493,10 @@ func (s *UpdaterService) bookkeepManualPolicyRow(ctx context.Context, p *imagePo
 	}()
 	_, err = s.observeImagePolicy(ctx, p, one, check)
 	return err
+}
+
+// withoutRegistryImages: a project whose services are all built locally has no
+// registry image to check; its summary stays "unknown" but nothing failed.
+func withoutRegistryImages(check *projectDTO.UpdateInfo) bool {
+	return check.ImageCount == 0 && check.Status == "unknown"
 }

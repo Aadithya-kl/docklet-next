@@ -68,6 +68,12 @@ func RegisterUpdater(api huma.API, updaterService *UpdaterService, appCtx handle
 		Path:    "/environments/{id}/updater/projects/{projectId}/check",
 		Summary: "Check project service updates", Tags: []string{"Updater"}, Security: handlerutil.DefaultOperationSecurity(),
 	}, authz.PermImageUpdatesCheck, h.CheckProjectUpdates)
+	// Manual checks are executed by the hub against the selected host.
+	middleware.RegisterWithPermission(api, huma.Operation{
+		OperationID: "check-container-update", Method: http.MethodPost,
+		Path:    "/environments/{id}/updater/containers/{containerId}/check",
+		Summary: "Check one container for an image update", Tags: []string{"Updater"}, Security: handlerutil.DefaultOperationSecurity(),
+	}, authz.PermImageUpdatesCheck, h.CheckContainerUpdate)
 	middleware.RegisterWithPermission(api, huma.Operation{
 		OperationID: "run-updater",
 		Method:      http.MethodPost,

@@ -9,6 +9,34 @@ The [update policy model](update-policy-model.md) (M18) replaces the stack-only 
 master gates and the per-host schedules below; the admission, revalidation and notification
 invariants of this note stay binding.
 
+## Manual checks and binding eligibility
+
+A manual container check resolves the current managed instance on its requested
+host, runs a fresh updater observation and performs the same candidate bookkeeping
+as a project check. The hub records `image_update_check` with that host as its
+environment, the project or container name as its resource and an explicit
+`check_project_update` or `check_container_update` action. Reading existing
+observations does not create a manual-check activity.
+
+Binding eligibility reads the saved Compose model and filesystem inputs on the
+target executor. It shares the literal image, build, layout, anchor and writable
+file predicates with update admission and then asks the admission writer's
+read-only validation, which parses the document once and checks each service on
+its own: a refusal of the whole document (for example any YAML anchor, alias or
+merge key, which the in-place writer does not rewrite) is a project binding; a
+refusal of one service's image source (for example a multi-line scalar) names
+that service, and admission keeps the same scope. It uses no Docker observation,
+registry access or writes. A refusal identifies its project or service scope and a declared reason;
+a variable reference includes only the variable name. Eligibility explains the
+current safety boundary and does not edit interpolation, defaults or `.env` files.
+
+The web refuses a selection only for bindings that admission would refuse: a
+project-scoped binding, the selected service, or for the whole stack a service
+with a pending update. The stack header hides its update action only when every
+service with an update is bound. Agents without the eligibility read, unknown
+versions and failed reads predict nothing; an actual refusal shows its reason.
+A manual check with an unknown outcome stays repeatable.
+
 ## Policy trigger state table
 
 | State / event | Admission and durable result |
@@ -209,3 +237,29 @@ Phase 2 owns `activity/capabilities*.go`, evidence helpers/tests in `activity/ru
 `backend/pkg/libarcane/edge/command_client*.go` only for bounded point-list response assembly/tests; `scripts/agent-contract.mjs`, generated contracts and named message subtree.
 No admission lock change or runtime_http_service.go edit is needed. Other web code/tests belong to #231; migrations and other producers stay read-only.
 Focused checks/red mutations precede full lint/test under the load rule. Phase 1 changes this design only and uses text checks.
+
+## Manual host checks
+
+The manual-only static job `update-check-host` uses the durable run's environment
+as its target, including environment `0`. The existing job-run route admits it
+on the hub after checking the enabled registration and JobsManage permission.
+Queued and running submissions for the same host join one run. Execution and
+restart reconciliation recheck permission and registration before running that
+host's check; a replacement registration created after admission refuses the old
+run. Agent delivery and agent history are never used for this job.
+
+The Stacks host header follows the run through its activity and jobRef. Its
+`check:host:<id>` gate shares admission across controls in one browser, and the
+hub coordinator joins concurrent admissions from other tabs. The control stays
+busy through completion and the following inventory read. Result counts describe
+stacks with at least one update and standalone containers with updates, across
+the host's full refreshed inventory, including hidden rows. The all-hosts action
+uses the existing `update-check` / `check-all` path; while it runs, each host
+control is busy. A partial run still reports its counts, with the number of
+targets that could not be checked and a link to the run; a failed run refreshes
+badges but reports failure. Navigation or an identity change discards local
+feedback. An admission with an unknown
+outcome is not kept: the check says it did not finish and can be sent again,
+because the hub joins an existing run for that host. With no stack on any visible
+host, the page keeps its first-run empty state and offers the all-hosts check in
+its header (AUTO-9).

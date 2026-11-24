@@ -18,7 +18,7 @@ import { Button } from "@/shared/ui/button";
 import { Choice, ErrorView } from "./controls";
 import { InstanceWorkspace } from "./InstanceWorkspace";
 import { Setup } from "./Setup";
-import type { CreateInstance, Instance } from "./types";
+import type { Adoption, CreateInstance, Instance } from "./types";
 
 /** The page shows exactly one view; the instance Select is derived from it, never the other way round. */
 type View = { kind: "instance"; id: string } | { kind: "setup" };
@@ -46,6 +46,9 @@ function Manager() {
     };
   });
   const api = connection.api;
+  // `attempts` bounds the open-time fallback walk; `chosen` is set when the person picked the instance.
+  const attempts = useRef(new Set<string>()), chosen = useRef(false);
+  const [stale,setStale]=useState<Record<string, Adoption>>({});
   const [instances, setInstances] = useState<Instance[]>(),
     [{ view, last }, setPage] = useState<{ view: View; last: string }>({ view: { kind: "setup" }, last: "" }),
     [busy, setBusy] = useState(false),
@@ -62,7 +65,7 @@ function Manager() {
         if (live && active.current) {
           setError(undefined);
           setInstances(rows);
-          setPage(to(first(rows)));
+          chosen.current = false; setPage(to(first(rows)));
         }
       },
       e => {
@@ -87,7 +90,7 @@ function Manager() {
       const i = await api.create(input);
       if (active.current) {
         setInstances(old => [...(old ?? []), i]);
-        setPage(to({ kind: "instance", id: i.id }));
+        chosen.current = true; setPage(to({ kind: "instance", id: i.id }));
       }
     } catch (e) {
       if (active.current) setError(e);
@@ -111,7 +114,7 @@ function Manager() {
                 {instance ? <div className="min-w-0">
                   <p className="text-xs text-muted-foreground">{t("activeProxy")}</p>
                   <p className="font-semibold [overflow-wrap:anywhere]">{instance.name} · {contract(`kinds.${instance.kind}`)}</p>
-                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2"><span className="font-mono text-xs [overflow-wrap:anywhere]">{instance.identity.containerName}</span><ToneBadge tone="cyan">{hosts.data?.find(h => h.id === instance.environmentId)?.name ?? instance.environmentId}</ToneBadge></div>
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2"><span className="font-mono text-xs [overflow-wrap:anywhere]">{instance.identity.containerName}</span>{stale[instance.id] && <ToneBadge tone="warn">{contract("adoption.stale")}</ToneBadge>}<ToneBadge tone="cyan">{hosts.data?.find(h => h.id === instance.environmentId)?.name ?? instance.environmentId}</ToneBadge></div>
                 </div> : <p className="text-sm text-muted-foreground">{t("instance")}</p>}
               </div>
               <div className="w-full min-w-0 md:w-72"><Choice
@@ -120,11 +123,11 @@ function Manager() {
                 hideLabel
                 value={instance ? instance.id : SETUP}
                 placeholder={t("instance")}
-                onChange={v => setPage(to(v === SETUP ? { kind: "setup" } : { kind: "instance", id: v }))}
+                onChange={v => { chosen.current = v !== SETUP; setPage(to(v === SETUP ? { kind: "setup" } : { kind: "instance", id: v })); }}
                 options={[
                   ...instances.map(i => ({
                     value: i.id,
-                    label: `${i.name} · ${hosts.data?.find(h => h.id === i.environmentId)?.name ?? i.environmentId} · ${i.identity.containerName}`,
+                    label: `${i.name} · ${hosts.data?.find(h => h.id === i.environmentId)?.name ?? i.environmentId} · ${i.identity.containerName} · ${i.identity.containerId.slice(0,12)}${stale[i.id] ? ` · ${contract("adoption.stale")}` : ""}`,
                   })),
                   { value: SETUP, label: t("newInstanceOption") },
                 ]}
@@ -141,11 +144,22 @@ function Manager() {
                 key={JSON.stringify(instance)}
                 instance={instance}
                 api={api}
+                adoption={{
+                  claim: id => { if (attempts.current.has(id)) return false; attempts.current.add(id);return true; },
+                  result: (answer, opened) => {
+                    if (answer.outcome !== "refused") { setStale(old => { const { [answer.instance.id]: _cleared, ...rest } = old; return rest; }); return; }
+                    setStale(old=>({...old,[answer.instance.id]:answer}));
+                    // Only opening switches the view: to the successor, or (when the page chose the instance) to the next untried one.
+                    if (!opened) return;
+                    const next=instances.find(i=>i.id===answer.supersededBy && !attempts.current.has(i.id)) ?? (chosen.current ? undefined : instances.find(i=>i.id!==answer.instance.id && !attempts.current.has(i.id)));
+                    if (next) setPage(to({kind:"instance",id:next.id}));
+                  },
+                }}
                 updated={i => setInstances(old => old?.map(row => (row.id === i.id ? i : row)))}
                 removed={() => {
                   const rest = instances.filter(row => row.id !== instance.id);
                   setInstances(rest);
-                  setPage(to(first(rest)));
+                  chosen.current = false; setPage(to(first(rest)));
                 }}
               />
             </>
@@ -163,7 +177,7 @@ function Manager() {
                 busy={busy}
               />
               {back && (
-                <Button variant="ghost" onClick={() => setPage(to({ kind: "instance", id: back.id }))}>
+                <Button variant="ghost" onClick={() => { chosen.current = true; setPage(to({ kind: "instance", id: back.id })); }}>
                   {t("back")}
                 </Button>
               )}
@@ -180,7 +194,7 @@ function Manager() {
                 if (active.current) {
                   setError(undefined);
                   setInstances(rows);
-                  setPage(to(first(rows)));
+                  chosen.current = false; setPage(to(first(rows)));
                 }
               },
               e => {

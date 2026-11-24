@@ -43,7 +43,7 @@ export const enHosts = {
       fileIdsValue: "{uid}:{gid} · {source, select, manual {set manually} other {taken from the directory owner}}",
       socket: "Docker socket group",
       socketValue: "GID {gid} · {source, select, manual {set manually} other {detected locally}} · separate from PUID/PGID",
-      root: "The project directory is owned by root. Docklet does not change permissions; set IDs deliberately if needed.",
+      root: "The agent cannot write to the project directory. Set PUID/PGID to the directory owner {uid}:{gid} or change the owner.",
       unraid: "Unraid share (nobody:users) – typical for Unraid.",
     },
     systemComponent: {
@@ -59,6 +59,7 @@ export const enHosts = {
     system: "System",
     lastSeen: "Last contact",
     usage: "{stacks, plural, one {# stack} other {# stacks}} · {containers, plural, one {# container} other {# containers}}",
+    unreadable: "{count, plural, one {# entry} other {# entries}} not readable",
     usageUnknown: "Stacks and containers: unknown",
     check: "Check connection",
     checking: "Checking …",

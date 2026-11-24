@@ -301,7 +301,24 @@ func (m *Module) CreateInstance(ctx context.Context, q dto.CreateInstanceRequest
 	}
 	i.Generation = inventory.Generation
 	i.Eligibility = inventory.Eligibility
-	err = m.Modules.Admit(ctx, features.Proxy, func(ctx context.Context) error { return m.saveInstance(ctx, i) })
+	m.Hub.mu.Lock()
+	defer m.Hub.mu.Unlock()
+	err = m.Modules.Admit(ctx, features.Proxy, func(ctx context.Context) error {
+		return m.Hub.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			owner, er := instanceOwner(tx, i)
+			if er != nil {
+				return er
+			}
+			if owner != "" {
+				return dto.Fail(dto.OperationConflict, 409)
+			}
+			data, er := marshal(i)
+			if er != nil {
+				return er
+			}
+			return tx.Create(&instanceRow{ID: i.ID, EnvironmentID: i.EnvironmentID, Data: data}).Error
+		})
+	})
 	return i, err
 }
 func (m *Module) saveInstance(ctx context.Context, i dto.Instance) error {
@@ -312,7 +329,7 @@ func (m *Module) saveInstance(ctx context.Context, i dto.Instance) error {
 	return m.Hub.DB.WithContext(ctx).Save(&instanceRow{ID: i.ID, EnvironmentID: i.EnvironmentID, Data: b}).Error
 }
 func (m *Module) UpdateInstance(ctx context.Context, id string, s dto.Settings) (dto.Instance, error) {
-	i, err := m.Instance(ctx, id)
+	i, original, err := m.instanceSnapshot(ctx, id)
 	if err != nil {
 		return i, err
 	}
@@ -328,7 +345,24 @@ func (m *Module) UpdateInstance(ctx context.Context, id string, s dto.Settings) 
 		return i, err
 	}
 	if err := m.revalidateSettings(ctx, i); err != nil {
-		return i, err
+		if reason(err, "") != dto.ContainerChanged {
+			return i, err
+		}
+		adopted, er := m.Adopt(ctx, id)
+		if er != nil {
+			return i, er
+		}
+		if adopted.Outcome == dto.AdoptionRefused {
+			return i, dto.Fail(dto.ContainerChanged, 409)
+		}
+		i, original, err = m.instanceSnapshot(ctx, id)
+		if err != nil {
+			return i, err
+		}
+		i.Name, i.RootFile, i.RouteDirectory = s.Name, s.RootFile, s.RouteDirectory
+		if er = m.revalidateSettings(ctx, i); er != nil {
+			return i, er
+		}
 	}
 	inv, err := m.Transport.Inventory(ctx, i)
 	if err != nil {
@@ -340,18 +374,35 @@ func (m *Module) UpdateInstance(ctx context.Context, id string, s dto.Settings) 
 	if err != nil {
 		return i, err
 	}
-	return i, m.Modules.Admit(ctx, features.Proxy, func(ctx context.Context) error { return m.saveInstance(ctx, i) })
+	m.Hub.mu.Lock()
+	defer m.Hub.mu.Unlock()
+	return i, m.Modules.Admit(ctx, features.Proxy, func(ctx context.Context) error {
+		return m.Hub.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			open, er := instanceOpen(tx, id)
+			if er != nil {
+				return er
+			}
+			if open {
+				return dto.Fail(dto.ModuleBusy, 409)
+			}
+			return casInstance(tx, original, i)
+		})
+	})
 }
 func (m *Module) RemoveInstance(ctx context.Context, id string) error {
-	return m.Hub.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var n int64
-		if err := tx.Model(&reservation{}).Where("instance_id = ?", id).Count(&n).Error; err != nil {
-			return err
-		}
-		if n != 0 {
-			return dto.Fail(dto.ModuleBusy, 409)
-		}
-		return tx.Delete(&instanceRow{}, "id = ?", id).Error
+	m.Hub.mu.Lock()
+	defer m.Hub.mu.Unlock()
+	return m.Modules.Admit(ctx, features.Proxy, func(ctx context.Context) error {
+		return m.Hub.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			open, er := instanceOpen(tx, id)
+			if er != nil {
+				return er
+			}
+			if open {
+				return dto.Fail(dto.ModuleBusy, 409)
+			}
+			return tx.Delete(&instanceRow{}, "id = ?", id).Error
+		})
 	})
 }
 func (m *Module) Operations(ctx context.Context, id string) ([]dto.Operation, error) {
@@ -457,30 +508,79 @@ func (m *Module) Discover(ctx context.Context, environmentID string) ([]dto.Disc
 // A new operation uses a fresh authenticated executor binding. Historical
 // records keep their original binding, including after credential rotation.
 func (m *Module) CreateOperation(ctx context.Context, id string, input dto.OperationRequest) (dto.Operation, error) {
-	instance, err := m.Instance(ctx, id)
+	instance, err := m.writeAdmission(ctx, id, true)
 	if err != nil {
 		return dto.Operation{}, err
 	}
-	inventory, err := m.Transport.Inventory(ctx, instance)
-	if err != nil {
-		return dto.Operation{}, err
-	}
-	registration, err := m.Transport.Registration(ctx, instance.EnvironmentID)
-	if err != nil {
-		return dto.Operation{}, err
-	}
-	instance.Generation = inventory.Generation
-	instance.Registration = registration
-	if inventory.Identity.ContainerID == instance.Identity.ContainerID && inventory.Identity.StartedAt != "" {
-		instance.Identity.StartedAt = inventory.Identity.StartedAt // a restart keeps container and source
-	}
-	instance.Eligibility = inventory.Eligibility
-	if err = Eligibility(instance); err != nil {
-		return dto.Operation{}, err
-	}
-	if err = m.Modules.Admit(ctx, features.Proxy, func(ctx context.Context) error { return m.saveInstance(ctx, instance) }); err != nil {
-		return dto.Operation{}, err
-	}
-	request := dto.ApplyRequest{ID: uuid.NewString(), Instance: instance, Generation: instance.Generation, Registration: registration, Target: input.Target, Expected: input.Expected, GraphHashes: input.GraphHashes, Change: input.Change, Acknowledgements: input.Acknowledgements}
+	request := dto.ApplyRequest{ID: uuid.NewString(), Instance: instance, Generation: instance.Generation, Registration: instance.Registration, Target: input.Target, Expected: input.Expected, GraphHashes: input.GraphHashes, Change: input.Change, Acknowledgements: input.Acknowledgements}
 	return m.Hub.Apply(ctx, request)
+}
+
+// writeAdmission refreshes the instance for a write. A recreated container is
+// adopted first (AUTO-1), and the refreshed identity (a restart's StartedAt),
+// generation and registration are stored before the hub's admission compares
+// them. A concurrent change of the stored container identity is
+// container-changed; any other concurrent change of the row is retried once,
+// and a second one is an operation conflict.
+func (m *Module) writeAdmission(ctx context.Context, id string, eligible bool) (dto.Instance, error) {
+	for attempt := 0; ; attempt++ {
+		instance, original, err := m.instanceSnapshot(ctx, id)
+		if err != nil {
+			return dto.Instance{}, err
+		}
+		inventory, err := m.Transport.Inventory(ctx, instance)
+		if reason(err, "") == dto.ContainerChanged {
+			adoption, er := m.Adopt(ctx, id)
+			if er != nil {
+				return dto.Instance{}, er
+			}
+			if adoption.Outcome == dto.AdoptionRefused {
+				return dto.Instance{}, dto.Fail(dto.ContainerChanged, 409)
+			}
+			if instance, original, err = m.instanceSnapshot(ctx, id); err != nil {
+				return dto.Instance{}, err
+			}
+			inventory, err = m.Transport.Inventory(ctx, instance)
+		}
+		if err != nil {
+			return dto.Instance{}, err
+		}
+		if inventory.Identity.ContainerID != instance.Identity.ContainerID {
+			return dto.Instance{}, dto.Fail(dto.ContainerChanged, 409)
+		}
+		registration, err := m.Transport.Registration(ctx, instance.EnvironmentID)
+		if err != nil {
+			return dto.Instance{}, err
+		}
+		instance.Generation = inventory.Generation
+		instance.Registration = registration
+		if inventory.Identity.StartedAt != "" {
+			instance.Identity.StartedAt = inventory.Identity.StartedAt // a restart keeps container and source
+		}
+		instance.Eligibility = inventory.Eligibility
+		if eligible {
+			if err = Eligibility(instance); err != nil {
+				return dto.Instance{}, err
+			}
+		}
+		m.Hub.mu.Lock()
+		err = m.Modules.Admit(ctx, features.Proxy, func(ctx context.Context) error {
+			return m.Hub.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return casInstance(tx, original, instance) })
+		})
+		m.Hub.mu.Unlock()
+		if reason(err, "") == dto.ContainerChanged {
+			current, _, er := m.instanceSnapshot(ctx, id)
+			if er != nil {
+				return dto.Instance{}, er
+			}
+			if current.Identity.ContainerID != instance.Identity.ContainerID || current.Identity.ContainerName != instance.Identity.ContainerName {
+				return dto.Instance{}, err
+			}
+			if attempt == 0 {
+				continue
+			}
+			return dto.Instance{}, dto.Fail(dto.OperationConflict, 409)
+		}
+		return instance, err
+	}
 }

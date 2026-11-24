@@ -1,7 +1,9 @@
 import { useBulkRun, useBulkCapabilities } from "@/shared/hooks/use-bulk-run";
 import type { BulkAction, BulkItem } from "@/shared/hooks/bulk-run";
+import { HostCheckAction } from "@/shared/components/updates/host-check-action";
 import { BulkUpdateDialog } from "@/shared/components/updates/BulkUpdateDialog";
 import { InventoryNotice } from "../InventoryNotice";
+import { unreadableRows } from "@/domain/unreadable";
 import { AlertTriangle, Download, Layers, Play, Plus, RefreshCw, RotateCw, Square } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router";
@@ -159,15 +161,15 @@ export default function StacksPage() {
         title={t("title")}
         description={t("description", { scope })}
         actions={
-          isUser ? undefined : deployCapability.available ? <Button asChild className="group">
+          isUser ? undefined : <div className="flex flex-wrap items-center gap-2">{!hosts.filtered && <HostCheckAction />}{deployCapability.available ? <Button asChild className="group">
             <Link to="/stacks/new">
               <Plus data-icon="inline-start" className="transition-transform duration-(--dur) group-hover:rotate-90" />
               {t("newStack")}
             </Link>
-          </Button> : <Button disabled title={deployCapability.reason}><Plus data-icon="inline-start" />{t("newStack")}</Button>
+          </Button> : <Button disabled title={deployCapability.reason}><Plus data-icon="inline-start" />{t("newStack")}</Button>}</div>
         }
       />
-      <InventoryNotice hosts={hosts.visible} items={stacks.visible} />
+      <InventoryNotice hosts={hosts.visible} items={stacks.visible} kinds={["stacks"]} />
       <StatStrip compact
         items={[
           { label: t("strip.stacks"), value: totalsPending ? "–" : stacks.visible.length, icon: <Layers /> },
@@ -195,6 +197,9 @@ export default function StacksPage() {
           <OverviewSkeleton mode={mode} />
         ) : stacks.isError ? (
           <QueryError error={stacks.error} onRetry={() => void stacks.refetch()} />
+        ) : stacks.visible.length === 0 && hosts.visible.some((h) => unreadableRows(h.inventory, ["stacks"]).count > 0 || !!h.inventory?.stale) ? (
+          // A host whose stacks could not be read is never shown as "no stacks yet" (#600).
+          <EmptyState icon={<AlertTriangle />} title={t("emptyUnreadable.title")} description={t("emptyUnreadable.description")} />
         ) : stacks.visible.length === 0 ? (
           <EmptyState
             icon={<Layers />}
@@ -208,7 +213,7 @@ export default function StacksPage() {
           />
         ) : rows.length === 0 && hidden.length > 0 && layout !== "hosts" ? (
           <HiddenSection kind="stacks" entries={hiddenEntries(hidden, true)} />
-        ) : rows.length === 0 && hidden.length === 0 ? (
+        ) : rows.length === 0 && hidden.length === 0 && (layout !== "hosts" || filtersActive) ? (
           <EmptyState
             icon={<Layers />}
             title={t("empty.title")}
@@ -228,6 +233,7 @@ export default function StacksPage() {
           />
         ) : layout === "hosts" ? (
           <HostBlocks
+            actions={isUser ? undefined : (host) => <HostCheckAction hostId={host.id} />}
             sortBar="header"
             hosts={hosts.visible}
             rows={rows}
