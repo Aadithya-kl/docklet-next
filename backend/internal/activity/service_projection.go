@@ -9,6 +9,7 @@ package activity
 import (
 	"cmp"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -235,6 +236,7 @@ func activityToDTOInternal(model *Activity) activity.Activity {
 		ResourceID:          copyPtrInternal(model.ResourceID),
 		ResourceName:        copyPtrInternal(model.ResourceName),
 		Progress:            clampProgressPtrInternal(model.Progress),
+		Bulk:                bulkFromMetadataInternal(model.Metadata),
 		Step:                model.Step,
 		LatestMessage:       model.LatestMessage,
 		MessageCode:         model.MessageCode,
@@ -481,6 +483,8 @@ func (s *ActivityService) SyncJobRun(ctx context.Context, run scheduler.Run, nam
 			}
 		}
 		changed = true
+		// Count-only updates refresh the row and publish it; only a lifecycle change adds a message row.
+		lifecycle := existing.Step != model.Step || existing.MessageCode != model.MessageCode || existing.LatestMessage != model.LatestMessage || existing.Status != model.Status
 		if err := tx.Table("activities").Where("id = ?", run.ActivityID).Updates(map[string]any{
 			"environment_id": model.EnvironmentID,
 			"status":         model.Status, "step": model.Step, "latest_message": model.LatestMessage,
@@ -490,8 +494,10 @@ func (s *ActivityService) SyncJobRun(ctx context.Context, run scheduler.Run, nam
 		}).Error; err != nil {
 			return err
 		}
-		if err := tx.Create(&ActivityMessage{ActivityID: model.ID, Level: activity.MessageLevelInfo, Message: model.LatestMessage, Code: model.MessageCode, Step: model.Step, CreatedAt: run.UpdatedAt}).Error; err != nil {
-			return err
+		if lifecycle {
+			if err := tx.Create(&ActivityMessage{ActivityID: model.ID, Level: activity.MessageLevelInfo, Message: model.LatestMessage, Code: model.MessageCode, Step: model.Step, CreatedAt: run.UpdatedAt}).Error; err != nil {
+				return err
+			}
 		}
 		syncedAt := time.Now().UTC()
 		return tx.Save(&ActivitySyncReceipt{RunID: run.ID, UpdatedAt: run.UpdatedAt, SyncedAt: &syncedAt}).Error
@@ -533,6 +539,16 @@ func jobActivityInternal(run scheduler.Run, name string) Activity {
 			"jobStatus": string(run.Status), "trigger": run.Trigger, "attemptCount": run.AttemptCount,
 			"runUpdatedAt": run.UpdatedAt.Format(time.RFC3339Nano), "domainActivityId": run.Outcome.ActivityID,
 		},
+	}
+	// An immediately started run has no waiting phase; only a recorded predecessor makes queued a step.
+	if run.Status == scheduler.Queued && run.DeferredBy == "" {
+		model.Step = ""
+	}
+	if counts, ok := run.Outcome.Counts(); ok {
+		model.Metadata["bulk"] = activity.BulkProgress{
+			Unit: "target", Planned: counts.Planned, PlannedKnown: counts.PlannedKnown, Completed: counts.Completed,
+			Succeeded: counts.Succeeded, Failed: counts.Failed, Skipped: counts.Skipped, Updates: counts.Updates,
+		}
 	}
 	services := make([]string, 0, len(run.Outcome.Targets))
 	for _, target := range run.Outcome.Targets {
@@ -696,4 +712,21 @@ func compareActivitiesInternal(a, b activity.Activity, params pagination.QueryPa
 		result = -result
 	}
 	return cmp.Or(result, strings.Compare(a.ID, b.ID))
+}
+
+// bulkFromMetadataInternal reads the counts the job projection stored; activities without them have none.
+func bulkFromMetadataInternal(metadata database.JSON) *activity.BulkProgress {
+	raw, ok := metadata["bulk"]
+	if !ok || raw == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var bulk activity.BulkProgress
+	if json.Unmarshal(encoded, &bulk) != nil || bulk.Unit != "target" {
+		return nil
+	}
+	return &bulk
 }
