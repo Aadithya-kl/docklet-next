@@ -2,7 +2,7 @@
 // Revision: e683d402f358e87b8eef5b81a71b530fd70cc0fe
 // Retrieved: 2026-11-10
 // License: Apache-2.0
-// Deviations: Original late consumer identity and failed-refresh invalidation assertions.
+// Deviations: Original late consumer identity and failed-refresh invalidation assertions; #634 build time scope.
 
 package imageupdate
 
@@ -35,6 +35,8 @@ func TestConsumerObservationLateIdentityAndFailureInvalidation(t *testing.T) {
 			require.NoError(t, err)
 			saved := ImageUpdateRecord{ID: "container::consumer", ContainerID: consumer.ID, ImageID: id, Repository: "registry.example.com/app", Tag: "1.0.0", PolicyKey: imageref.UpdatePolicyKey(ref, labels), HasUpdate: true, CheckTime: time.Now().Add(-time.Hour)}
 			saved.SetNativeObservation(native)
+			built := time.Date(2026, 11, 24, 6, 0, 0, 0, time.UTC)
+			saved.CurrentCreated, saved.LatestCreated = &built, &built
 			require.NoError(t, db.Create(&saved).Error)
 			inspected := container.InspectResponse{ID: consumer.ID, Image: id, Config: &container.Config{Image: ref, Labels: labels}}
 			switch change {
@@ -61,15 +63,19 @@ func TestConsumerObservationLateIdentityAndFailureInvalidation(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, "unknown", result.State)
 			} else {
-				result := &checkDTO.Response{ImageRef: ref, State: "version", HasUpdate: true, CurrentDigest: id, LatestDigest: next, CheckTime: time.Now().UTC()}
+				result := &checkDTO.Response{ImageRef: ref, State: "version", HasUpdate: true, CurrentDigest: id, LatestDigest: next, CheckTime: time.Now().UTC(), CurrentCreated: &built, LatestCreated: &built}
 				require.NoError(t, svc.saveConsumerObservation(t.Context(), consumer, result, identity.LocalImage{}, &native))
 				require.Equal(t, "unknown", result.State)
+				require.Nil(t, result.CurrentCreated, "the returned observation drops build times with its evidence")
+				require.Nil(t, result.LatestCreated)
 			}
 			var after ImageUpdateRecord
 			require.NoError(t, db.First(&after, "id=?", saved.ID).Error)
 			require.False(t, after.HasUpdate, "a slow or failed check must replace earlier candidate eligibility")
 			require.Nil(t, after.Platform, "unproven consumer bytes cannot acquire native provenance")
 			require.NotNil(t, after.LastError)
+			require.Nil(t, after.CurrentCreated, "build times leave with their identity evidence")
+			require.Nil(t, after.LatestCreated)
 		})
 	}
 }
@@ -90,4 +96,40 @@ func TestConsumerObservationImplicitLatestReference(t *testing.T) {
 	require.Equal(t, "latest", saved.Tag)
 	require.False(t, saved.HasUpdate)
 	require.NotNil(t, saved.LastError)
+}
+
+// Build times are stored only with native identity evidence and only for the
+// consumer's own platform (#634).
+func TestConsumerObservationBuildTimesNeedVerifiedIdentity(t *testing.T) {
+	db := setupImageUpdateRegistryTestDBInternal(t)
+	ref := "registry.example.com/app:latest"
+	id := "sha256:" + strings.Repeat("a", 64)
+	consumer := container.Summary{ID: "consumer", Image: ref, ImageID: id}
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(container.InspectResponse{ID: consumer.ID, Image: id, Config: &container.Config{Image: ref}})
+	}))
+	t.Cleanup(daemon.Close)
+	svc := NewImageUpdateService(db, nil, nil, &docker.DockerClientService{Client: newImageUpdateTestDockerClientInternal(t, daemon)}, nil, nil, nil)
+	localID, err := identity.ParseLocalID(id)
+	require.NoError(t, err)
+	built := time.Date(2026, 11, 24, 6, 0, 0, 0, time.UTC)
+	// The result's digests match no native observation of this consumer.
+	result := &checkDTO.Response{ImageRef: ref, State: "rebuild", HasUpdate: true, CurrentDigest: "sha256:" + strings.Repeat("c", 64), LatestDigest: "sha256:" + strings.Repeat("b", 64), CheckTime: time.Now().UTC(), CurrentCreated: &built, LatestCreated: &built}
+	require.NoError(t, svc.saveConsumerObservation(t.Context(), consumer, result, identity.LocalImage{ID: localID}, nil))
+	var saved ImageUpdateRecord
+	require.NoError(t, db.First(&saved, "id=?", "container::consumer").Error)
+	require.Nil(t, saved.Platform)
+	require.Nil(t, saved.CurrentCreated, "no native evidence, no build time")
+	require.Nil(t, saved.LatestCreated)
+
+	arm, err := identity.ParsePlatform("linux/arm64")
+	require.NoError(t, err)
+	shared := &checkDTO.Response{Platform: "linux/amd64", CurrentCreated: &built, LatestCreated: &built}
+	scopeBuildTimes(shared, identity.LocalImage{Platform: arm})
+	require.Nil(t, shared.CurrentCreated, "another platform's snapshot names no build of this consumer")
+	require.Nil(t, shared.LatestCreated)
+	own := &checkDTO.Response{Platform: "linux/arm64", CurrentCreated: &built, LatestCreated: &built}
+	scopeBuildTimes(own, identity.LocalImage{Platform: arm})
+	require.NotNil(t, own.LatestCreated)
 }

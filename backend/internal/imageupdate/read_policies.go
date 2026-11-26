@@ -112,6 +112,13 @@ func (s *ImageUpdateService) ReadUpdateInfo(ctx context.Context, ref string) (*c
 				containerErr = imageDTO.Failure("update.check-unavailable", 503)
 			}
 		}
+		if containerErr == nil && policyErr == nil && policy.Strategy == "digest" && projected.Platform != "" && projected.Platform != local.Platform.String() {
+			// Another platform's same-tag result names neither this consumer's
+			// state nor its candidate digest.
+			projected = checkDTO.Response{ImageRef: discovered.ImageRef, CheckedAt: snapshot.CheckedAt, CheckTime: snapshot.CheckTime, AuthState: "unknown"}
+			containerErr = imageDTO.Failure("update.check-unavailable", 503)
+		}
+		scopeBuildTimes(&projected, local)
 		if inspectErr != nil || containerErr != nil || inspected.Container.Image != consumers[id] || consumers[id] == "" || consumers[id] != baseline.ID {
 			projected.State = "unknown"
 			projected.HasUpdate = false
@@ -141,7 +148,7 @@ func (s *ImageUpdateService) ReadUpdateInfo(ctx context.Context, ref string) (*c
 							}
 						}
 					}
-					info := &imageDTO.UpdateInfo{ImageRef: discovered.ImageRef, CheckTime: snapshot.CheckTime, Platform: local.Platform.String(), CurrentDigest: local.Key.String(), LatestDigest: latest, CurrentVersion: discovered.CurrentVersion, LatestVersion: candidateVersion, AuthState: candidate.AuthState}
+					info := &imageDTO.UpdateInfo{ImageRef: discovered.ImageRef, CheckTime: snapshot.CheckTime, Platform: local.Platform.String(), CurrentDigest: local.Key.String(), LatestDigest: latest, CurrentVersion: discovered.CurrentVersion, LatestVersion: candidateVersion, AuthState: candidate.AuthState, CurrentCreated: local.Created, LatestCreated: imageDTO.BuildTime(candidate.Created)}
 					if lookupErr != nil {
 						problem := imageDTO.Neutral(lookupErr, "update.check-unavailable", 503)
 						info.Error = problem.Error()
@@ -172,3 +179,11 @@ func (s *ImageUpdateService) ReadUpdateInfo(ctx context.Context, ref string) (*c
 }
 
 func checkCodeString(message string) string { return checkCode(errors.New(message)) }
+
+// scopeBuildTimes keeps build times only for the consumer's verified platform;
+// a shared snapshot of another platform names no build of this consumer.
+func scopeBuildTimes(projected *checkDTO.Response, local identity.LocalImage) {
+	if projected.Platform == "" || projected.Platform != local.Platform.String() {
+		projected.CurrentCreated, projected.LatestCreated = nil, nil
+	}
+}

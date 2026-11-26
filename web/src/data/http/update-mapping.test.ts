@@ -2,7 +2,7 @@
 // Revision: 5c1c4dd77cbeb7b5f702e50937bfc64de3c3f9d8
 // Retrieved: 2026-10-26
 // License: Apache-2.0
-// Deviations: Original stored-observation and deployment-history consumer for issue #231; M21 reads the pattern-tag checker fixture.
+// Deviations: Original stored-observation and deployment-history consumer for issue #231; M21 reads the pattern-tag checker fixture; #634 build dates.
 
 import { describe, expect, it } from "vitest";
 import { mapStack, type ProjectRow } from "./inventory-mapping";
@@ -26,6 +26,29 @@ describe("stored update observation", () => {
     expect(mapUpdateInfo({ ...observation("version"), latestVersion: "" }, image, "example:1.0.0").state).toBe("unknown");
     expect(() => mapUpdateInfo({ ...observation("current"), checkedAt: "" }, image, "example:1.0.0")).toThrow();
     expect(() => mapUpdateInfo({ ...observation("current"), authRegistry: 42 } as never, image, "example:1.0.0")).toThrow();
+  });
+  it("labels same-tag rebuilds by build date and never by an echoed tag or digest", () => {
+    const latestTag = { repository: "example", tag: "latest", deployed: "2026-11-10T07:00:00Z" };
+    const digest = (c: string) => `sha256:${c.repeat(64)}`;
+    const unlabelled = { ...observation("rebuild"), imageRef: "example:latest", currentVersion: "latest", latestVersion: "latest", currentDigest: digest("a"), latestDigest: digest("b"), updateType: "digest", platform: "linux/amd64" };
+    const dated = mapUpdateInfo({ ...unlabelled, currentCreated: "2026-11-12T08:00:00Z", latestCreated: "2026-11-24T06:00:00Z" }, latestTag, "example:latest");
+    expect(dated).toMatchObject({ state: "rebuild", current: { published: "2026-11-12T08:00:00Z" }, latest: { tag: "latest", published: "2026-11-24T06:00:00Z" } });
+    expect(dated.state === "rebuild" && dated.latest.version).toBe(undefined);
+    // Without build dates the running image keeps its deploy date; the candidate inherits nothing.
+    const undated = mapUpdateInfo(unlabelled, latestTag, "example:latest");
+    expect(undated.current).toEqual({ repository: "example", tag: "latest", version: "latest", deployed: "2026-11-10T07:00:00Z" });
+    expect(undated.state === "rebuild" && undated.latest).toEqual({ repository: "example", tag: "latest" });
+    expect(mapUpdateInfo({ ...unlabelled, latestVersion: "1.2.3" }, latestTag, "example:latest")).toMatchObject({ latest: { version: "1.2.3" } });
+    expect(() => mapUpdateInfo({ ...unlabelled, latestCreated: "yesterday" }, latestTag, "example:latest")).toThrow();
+  });
+  it("ignores a rebuild version that only repeats the running one", () => {
+    const patterned = { repository: "example", tag: "release-1.0.0" };
+    const echoed = { ...observation("rebuild"), imageRef: "example:release-1.0.0", currentVersion: "1.0.0", latestVersion: "1.0.0", latestCreated: "2026-11-24T06:00:00Z", updateType: "digest", platform: "linux/amd64" };
+    const tagPolicy = mapUpdateInfo(echoed, patterned, "example:release-1.0.0");
+    expect(tagPolicy.state === "rebuild" && tagPolicy.latest).toEqual({ ...patterned, published: "2026-11-24T06:00:00Z" });
+    const droppedLabel = mapUpdateInfo({ ...echoed, imageRef: "example:stable", currentVersion: "1.2.3", latestVersion: "1.2.3" }, { repository: "example", tag: "stable" }, "example:stable");
+    expect(droppedLabel.state === "rebuild" && droppedLabel.latest.version).toBe(undefined);
+    expect(mapUpdateInfo({ ...echoed, latestVersion: "1.0.1" }, patterned, "example:release-1.0.0")).toMatchObject({ latest: { version: "1.0.1" } });
   });
   it("does not call a partially checked stack current", () => {
     expect(summarizeUpdates([{ name: "web", update: mapUpdateInfo(observation("current"), image, "example:1.0.0") }, { name: "db", update: { state: "unchecked", current: image } }]).visual).toBe("unchecked");

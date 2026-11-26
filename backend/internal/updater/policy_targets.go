@@ -2,7 +2,7 @@
 // Revision: 89f69980c01d08714ce96c49365fb19065e3d6ba
 // Retrieved: 2026-11-04
 // License: Apache-2.0
-// Deviations: Original complete inventory reads and read-only eligible target projection.
+// Deviations: Original complete inventory reads and read-only eligible target projection; #634 image-level fallback without build facts.
 
 package updater
 
@@ -115,7 +115,9 @@ func containerCheckProjection(target updateTarget, response *checkDTO.Response) 
 	if response == nil {
 		return nil, imageDTO.Failure("update.check-unavailable", 503)
 	}
+	// The image-level observation names no build of this container.
 	info := imageCheckInfo(response)
+	info.CurrentCreated, info.LatestCreated = nil, nil
 	if one := response.ContainerUpdates[target.ContainerID]; one != nil {
 		info = imageCheckInfo(one)
 	}
@@ -209,7 +211,7 @@ func (s *UpdaterService) ListImagePolicies(ctx context.Context, env string) ([]d
 }
 
 func imageCheckInfo(r *checkDTO.Response) *imageDTO.UpdateInfo {
-	return &imageDTO.UpdateInfo{State: r.State, CheckedAt: r.CheckedAt, ImageRef: r.ImageRef, Platform: r.Platform, AuthState: r.AuthState, Code: r.Code, HasUpdate: r.HasUpdate, CurrentVersion: r.CurrentVersion, LatestVersion: r.LatestVersion, CurrentDigest: r.CurrentDigest, LatestDigest: r.LatestDigest}
+	return &imageDTO.UpdateInfo{State: r.State, CheckedAt: r.CheckedAt, ImageRef: r.ImageRef, Platform: r.Platform, AuthState: r.AuthState, Code: r.Code, HasUpdate: r.HasUpdate, CurrentVersion: r.CurrentVersion, LatestVersion: r.LatestVersion, CurrentCreated: r.CurrentCreated, LatestCreated: r.LatestCreated, CurrentDigest: r.CurrentDigest, LatestDigest: r.LatestDigest}
 }
 
 func projectUpdateTargets(stacks []projectDTO.Details, inventory []containerDTO.Summary) ([]updateTarget, error) {

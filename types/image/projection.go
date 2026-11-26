@@ -2,13 +2,14 @@
 // Revision: 361c54cb8d087b7d531ff8bb4dd1acae82f5f534
 // Retrieved: 2026-10-24
 // License: Apache-2.0
-// Deviations: Original PR1 image and registry safety implementation for issue #229.
+// Deviations: Original PR1 image and registry safety implementation for issue #229; #634 build times and lent observations.
 
 package image
 
 import (
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ProjectUpdate compares store-native keys at one verified platform: config
@@ -126,4 +127,35 @@ func CompareRelease(a, b string) (int, bool) {
 		}
 	}
 	return 0, true
+}
+
+// BuildTime keeps a plausible image config build time; reproducible builds
+// often stamp the epoch, which names no build. The UTC value must stay
+// encodable as RFC 3339 (year 9999 at most).
+func BuildTime(t time.Time) *time.Time {
+	u := t.UTC()
+	if u.Year() < 2000 || u.Year() > 9999 {
+		return nil
+	}
+	return &u
+}
+
+// BuildTimeText reads a Docker inspect Created value through BuildTime.
+func BuildTimeText(s string) *time.Time {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return nil
+	}
+	return BuildTime(t)
+}
+
+// Lend copies an observation for a consumer it was not made for. Build facts
+// and the platform that vouches for them stay with the observing consumer.
+func Lend(info *UpdateInfo) *UpdateInfo {
+	if info == nil {
+		return nil
+	}
+	out := *info
+	out.Platform, out.CurrentCreated, out.LatestCreated = "", nil, nil
+	return &out
 }

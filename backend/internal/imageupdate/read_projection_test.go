@@ -63,6 +63,7 @@ func TestPR1ReadProjectionUsesRealPlatformProducer(t *testing.T) {
 			require.NoError(t, err)
 			updatedConfig := *cfg
 			updatedConfig.Config.Labels = map[string]string{"org.opencontainers.image.version": scenario.version, "synthetic-generation": "next"}
+			updatedConfig.Created = v1.Time{Time: time.Date(2026, 11, 24, 6, 0, 0, 0, time.UTC)}
 			updated, err := mutate.ConfigFile(original, &updatedConfig)
 			if scenario.version == "tag-same-config" {
 				updated = original
@@ -127,7 +128,7 @@ func TestPR1ReadProjectionUsesRealPlatformProducer(t *testing.T) {
 					}())
 					return
 				}
-				_, _ = fmt.Fprintf(w, `{"Id":%q,"RepoDigests":[%q],"Os":"linux","Architecture":%q,"Config":{"Labels":{"org.opencontainers.image.version":"1.0.0"}}}`, func() string {
+				_, _ = fmt.Fprintf(w, `{"Id":%q,"Created":"2026-11-12T08:00:00Z","RepoDigests":[%q],"Os":"linux","Architecture":%q,"Config":{"Labels":{"org.opencontainers.image.version":"1.0.0"}}}`, func() string {
 					if scenario.version == "identity-mismatch" {
 						return "sha256:" + strings.Repeat("a", 64)
 					}
@@ -156,6 +157,20 @@ func TestPR1ReadProjectionUsesRealPlatformProducer(t *testing.T) {
 			require.Equal(t, oldID.String(), result.CurrentDigest, "classic compares config to config")
 			var record ImageUpdateRecord
 			require.NoError(t, db.First(&record, "id = ?", oldID.String()).Error)
+			switch scenario.version {
+			case "1.0.0":
+				// A same-tag rebuild carries both build times through the response and the stored record.
+				require.NotNil(t, result.CurrentCreated)
+				require.NotNil(t, result.LatestCreated)
+				require.Equal(t, "2026-11-12T08:00:00Z", result.CurrentCreated.Format(time.RFC3339))
+				require.Equal(t, "2026-11-24T06:00:00Z", result.LatestCreated.Format(time.RFC3339))
+				stored := record.UpdateInfo()
+				require.True(t, result.CurrentCreated.Equal(*stored.CurrentCreated))
+				require.True(t, result.LatestCreated.Equal(*stored.LatestCreated))
+			case "tag-policy":
+				require.Equal(t, "2026-11-24T06:00:00Z", result.ContainerUpdates["consumer"].LatestCreated.Format(time.RFC3339))
+				require.Equal(t, "2026-11-12T08:00:00Z", result.ContainerUpdates["consumer"].CurrentCreated.Format(time.RFC3339))
+			}
 			if scenario.version == "tag-policy" || scenario.version == "tag-pattern" || scenario.version == "tag-same-config" {
 				require.Equal(t, "current", result.ImageUpdate.State)
 				wantConsumer := "version"
@@ -191,7 +206,7 @@ func TestPR1ReadProjectionDeniedAndRateLimitedAreErrors(t *testing.T) {
 					_, _ = w.Write([]byte(`{"OSType":"linux","Architecture":"amd64"}`))
 					return
 				}
-				_, _ = fmt.Fprintf(w, `{"Id":%q,"RepoDigests":[%q],"Os":"linux","Architecture":"amd64","Config":{"Labels":{"org.opencontainers.image.version":"1.0.0"}}}`, "sha256:"+strings.Repeat("a", 64), host+"/app@sha256:"+strings.Repeat("b", 64))
+				_, _ = fmt.Fprintf(w, `{"Id":%q,"Created":"2026-11-12T08:00:00Z","RepoDigests":[%q],"Os":"linux","Architecture":"amd64","Config":{"Labels":{"org.opencontainers.image.version":"1.0.0"}}}`, "sha256:"+strings.Repeat("a", 64), host+"/app@sha256:"+strings.Repeat("b", 64))
 			}))
 			defer daemon.Close()
 			db := setupImageUpdateRegistryTestDBInternal(t)
@@ -214,6 +229,8 @@ func TestPR1ReadProjectionDeniedAndRateLimitedAreErrors(t *testing.T) {
 			require.NoError(t, db.First(&saved, "id = ?", prior.ID).Error)
 			require.Equal(t, "error", saved.UpdateInfo().State, "failed fresh observation must replace cached success")
 			require.True(t, saved.CheckTime.After(prior.CheckTime))
+			require.Nil(t, saved.CurrentCreated, "a build time leaves with its native evidence")
+			require.Nil(t, result.CurrentCreated)
 			if status == 401 {
 				require.Equal(t, "authentication-required", saved.UpdateInfo().AuthState)
 			}

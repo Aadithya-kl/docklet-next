@@ -57,7 +57,13 @@ func (s *ImageUpdateService) saveConsumerObservation(ctx context.Context, consum
 		}
 		if native != nil {
 			record.SetNativeObservation(*native)
+			// Build times belong to the native identity evidence kept here.
+			record.CurrentCreated, record.LatestCreated = result.CurrentCreated, result.LatestCreated
 		}
+	}
+	if record.Platform == nil {
+		// Build times leave the returned observation with their evidence, too.
+		result.CurrentCreated, result.LatestCreated = nil, nil
 	}
 	if result.Error != "" {
 		record.LastError = &result.Error
@@ -89,7 +95,7 @@ func (s *ImageUpdateService) invalidateConsumerObservations(ctx context.Context,
 	if code == "" {
 		code = "update.check-unavailable"
 	}
-	err = s.db.WithContext(ctx).Model(&ImageUpdateRecord{}).Where("repository=? AND tag=? AND container_id <> ''", reference.TrimNamed(named).String(), tagged.Tag()).Updates(map[string]any{"platform": nil, "has_update": false, "last_error": imageDTO.Failure(code, 503).Error(), "check_time": result.CheckTime}).Error
+	err = s.db.WithContext(ctx).Model(&ImageUpdateRecord{}).Where("repository=? AND tag=? AND container_id <> ''", reference.TrimNamed(named).String(), tagged.Tag()).Updates(map[string]any{"platform": nil, "has_update": false, "last_error": imageDTO.Failure(code, 503).Error(), "check_time": result.CheckTime, "current_created": nil, "latest_created": nil}).Error
 	if err != nil {
 		return imageDTO.Failure("update.persistence-failed", 500)
 	}
