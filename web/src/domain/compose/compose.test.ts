@@ -95,6 +95,13 @@ describe("validation", () => {
     expect(codes).toContain("api:image-missing");
     expect(codes).toContain("api:env-value-empty");
   });
+
+  it("requires a top-level name only when the caller does (#652)", () => {
+    const r = parseCompose(SOURCE.replace("name: media\n", ""));
+    if (!r.ok) throw new Error("expected valid YAML");
+    expect(validateCompose(r.model).map((i) => `${i.level}:${i.code}`)).toEqual(["error:name-missing"]);
+    expect(validateCompose(r.model, { requireName: false })).toEqual([]);
+  });
 });
 
 describe("docker run conversion", () => {
