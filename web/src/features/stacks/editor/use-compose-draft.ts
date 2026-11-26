@@ -2,7 +2,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { parseCompose } from "@/domain/compose/model";
 import { ComposeEditError, mutate, type Mutator } from "@/domain/compose/ops";
-import { validateCompose } from "@/domain/compose/validate";
+import { validateCompose, type ValidateOptions } from "@/domain/compose/validate";
 import { sameStackLabels } from "@/domain/stack-labels";
 
 export interface DraftSeed {
@@ -37,8 +37,9 @@ export interface ComposeDraft {
 /**
  * Single synchronized draft for Easy and Advanced. The raw text is the source of
  * truth; the form model is derived and never written back wholesale.
+ * An existing stack is named by its directory, so it passes requireName: false.
  */
-export function useComposeDraft(seed: DraftSeed): ComposeDraft {
+export function useComposeDraft(seed: DraftSeed, { requireName = true }: ValidateOptions = {}): ComposeDraft {
   const [saved, setSaved] = useState(seed);
   const [compose, setComposeState] = useState(seed.compose);
   const [env, setEnv] = useState(seed.env);
@@ -69,7 +70,7 @@ export function useComposeDraft(seed: DraftSeed): ComposeDraft {
   }
 
   const parsed = useMemo(() => parseCompose(compose), [compose]);
-  const issues = useMemo(() => (parsed.ok ? validateCompose(parsed.model) : []), [parsed]);
+  const issues = useMemo(() => (parsed.ok ? validateCompose(parsed.model, { requireName }) : []), [parsed, requireName]);
 
   const edit = useCallback((fn: Mutator) => {
     try {
