@@ -64,4 +64,17 @@ describe("Compose workspace on the shared editor module", () => {
     await userEvent.click(within(modes).getByRole("radio", { name: "Easy" }));
     expect(screen.getByText("Easy ist gesperrt, bis das YAML wieder gültig ist.") !== null).toBe(true);
   });
+
+  it("accepts an existing stack without a top-level name and keeps redeploy enabled (#652)", async () => {
+    renderRoutes([{ path: "/stacks/:stackId", element: <StackPage /> }], ["/stacks/media?tab=editor"]);
+    await screen.findByRole("textbox", { name: "Inhalt von compose.yaml" });
+    const view = editorView("Inhalt von compose.yaml");
+    const doc = view.state.doc.toString();
+    const from = doc.indexOf("name: media\n");
+    act(() => view.dispatch({ changes: { from, to: from + "name: media\n".length } }));
+    await waitFor(() => expect(screen.getByText(/^· 0 Fehler ·/) !== null).toBe(true));
+    expect(screen.queryByText("Stackname fehlt") === null).toBe(true);
+    const deploy = [...screen.getAllByRole("button", { name: /Speichern & Redeploy/ }), ...screen.getAllByRole("button", { name: "Weitere Deploy-Optionen" })];
+    expect(deploy.map((b) => b.hasAttribute("disabled"))).toEqual(deploy.map(() => false));
+  });
 });
