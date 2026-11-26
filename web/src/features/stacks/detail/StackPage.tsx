@@ -2,7 +2,7 @@
 // Revision: d6c87ce35acb0a517963f61e62852640a9dce5d99a34d2a2575077660b53bae0
 // Retrieved: 2026-10-13
 // License: Apache-2.0
-// Deviations: Guard rejected host queries before mounting the stack editor; preserves the historical L4 import and existing UI catalogue values. See web/PROVENANCE.md. #82 host inventory observations, localized stale notices and read-only controls. #27 production text, source errors and capability boundaries. M14 #318 host maintenance and availability web implementation. Simple-user management, assigned-stack access and mode-aware self-service. M42 #636: stack Health tab.
+// Deviations: Guard rejected host queries before mounting the stack editor; preserves the historical L4 import and existing UI catalogue values. See web/PROVENANCE.md. #82 host inventory observations, localized stale notices and read-only controls. #27 production text, source errors and capability boundaries. M14 #318 host maintenance and availability web implementation. Simple-user management, assigned-stack access and mode-aware self-service. M42 #636: stack Health tab. #652: existing stacks may omit the top-level Compose name.
 
 import { isHostAvailable } from "@/domain/hosts";
 import { InventoryNotice } from "../InventoryNotice";
@@ -83,7 +83,7 @@ function ExistingStack({ stack, onRetry }: { stack: StackDetail; onRetry: () => 
   // failure keeps the last loaded files as its base; writes stay gated meanwhile.
   const [files, setFiles] = useState(stack.filesUnavailable ? undefined : { compose: stack.compose, env: stack.env });
   if (!stack.filesUnavailable && (files?.compose !== stack.compose || files?.env !== stack.env)) setFiles({ compose: stack.compose, env: stack.env });
-  const draft = useComposeDraft({ compose: files?.compose ?? "", env: files?.env ?? "", hostId: stack.hostId, labels: stack.labels });
+  const draft = useComposeDraft({ compose: files?.compose ?? "", env: files?.env ?? "", hostId: stack.hostId, labels: stack.labels }, { requireName: false });
   const host = byId.get(stack.hostId);
 
   return (
