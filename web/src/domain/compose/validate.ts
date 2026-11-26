@@ -33,10 +33,15 @@ const DURATION = /^(\d+(\.\d+)?(us|ms|s|m|h))+$/;
 const CONTAINER_PORT = /^\d+(-\d+)?(\/(tcp|udp))?$/;
 const HOST_PORT = /^(\d{1,3}(\.\d{1,3}){3}:)?\d+(-\d+)?$/;
 
+export interface ValidateOptions {
+  /** Only a new stack needs a top-level name; Compose names existing ones after their directory. */
+  requireName?: boolean;
+}
+
 /** Required-field and plausibility checks; codes are translated by the UI. */
-export function validateCompose(m: ComposeModel): Issue[] {
+export function validateCompose(m: ComposeModel, { requireName = true }: ValidateOptions = {}): Issue[] {
   const out: Issue[] = [];
-  if (!m.name.trim()) out.push({ level: "error", code: "name-missing", field: "name" });
+  if (!m.name.trim()) { if (requireName) out.push({ level: "error", code: "name-missing", field: "name" }); }
   else if (!NAME.test(m.name)) out.push({ level: "warn", code: "name-format", field: "name" });
   if (!m.services.length) out.push({ level: "error", code: "no-services", field: "services" });
   for (const s of m.services) {
